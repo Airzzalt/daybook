@@ -25,12 +25,40 @@ const pool = new Pool({
 pool.on('error', (e) => console.error('pool error:', e.message));
 
 /* ------------------------------------------------------------------ auth */
+const SESSION_DAYS = 180;
 function sign(exp) {
   return crypto.createHmac('sha256', SECRET).update(String(exp)).digest('base64url');
 }
 function makeToken() {
-  const exp = Date.now() + 1000 * 60 * 60 * 24 * 60;
+  const exp = Date.now() + 1000 * 60 * 60 * 24 * SESSION_DAYS;
   return exp + '.' + sign(exp);
+}
+function setSession(res) {
+  res.setHeader('Set-Cookie',
+    `sid=${makeToken()}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${60 * 60 * 24 * SESSION_DAYS}`);
+}
+
+/* Password: a scrypt hash in the database once changed, otherwise the
+   DASH_PASSWORD environment variable. */
+function hashPw(pw, salt) {
+  return new Promise((ok, no) =>
+    crypto.scrypt(pw, salt, 64, (e, dk) => (e ? no(e) : ok(dk.toString('hex')))));
+}
+async function storedAuth() {
+  try {
+    const r = await pool.query(`SELECT value FROM dash_settings WHERE key='auth'`);
+    return (r.rows[0] && r.rows[0].value) || null;
+  } catch { return null; }
+}
+function sameSecret(a, b) {
+  const x = Buffer.from(String(a)), y = Buffer.from(String(b));
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+async function checkPw(given) {
+  const a = await storedAuth();
+  if (a && a.hash && a.salt) return sameSecret(await hashPw(given, a.salt), a.hash);
+  if (!PASSWORD) return false;
+  return sameSecret(given, PASSWORD);
 }
 function validToken(tok) {
   if (!tok || typeof tok !== 'string') return false;
@@ -54,8 +82,9 @@ function readCookie(req, name) {
 }
 function authed(req) { return validToken(readCookie(req, 'sid')); }
 function requireAuth(req, res, next) {
-  if (authed(req)) return next();
-  res.status(401).json({ error: 'unauthorised' });
+  if (!authed(req)) return res.status(401).json({ error: 'unauthorised' });
+  setSession(res); // sliding expiry — using it keeps you signed in
+  next();
 }
 
 const attempts = new Map();
@@ -73,18 +102,37 @@ function noteAttempt(ip, ok) {
   attempts.set(ip, a);
 }
 
-app.post('/api/login', (req, res) => {
+app.post('/api/login', async (req, res) => {
   const ip = req.ip || 'x';
   if (throttled(ip)) return res.status(429).json({ error: 'Too many attempts. Wait 15 minutes.' });
-  if (!PASSWORD) return res.status(500).json({ error: 'No password configured on the server.' });
   const given = String((req.body && req.body.password) || '');
-  const ok = given.length === PASSWORD.length &&
-    crypto.timingSafeEqual(Buffer.from(given), Buffer.from(PASSWORD));
+  let ok = false;
+  try { ok = await checkPw(given); } catch { ok = false; }
   noteAttempt(ip, ok);
   if (!ok) return res.status(401).json({ error: 'Wrong password.' });
-  res.setHeader('Set-Cookie',
-    `sid=${makeToken()}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${60 * 60 * 24 * 60}`);
+  setSession(res);
   res.json({ ok: true });
+});
+
+app.post('/api/password', requireAuth, async (req, res) => {
+  const cur = String((req.body && req.body.current) || '');
+  const next = String((req.body && req.body.next) || '');
+  if (next.length < 8) return res.status(400).json({ error: 'New password must be at least 8 characters.' });
+  let ok = false;
+  try { ok = await checkPw(cur); } catch { ok = false; }
+  if (!ok) return res.status(401).json({ error: 'Current password is wrong.' });
+  try {
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = await hashPw(next, salt);
+    await pool.query(
+      `INSERT INTO dash_settings (key, value, updated_at) VALUES ('auth', $1::jsonb, now())
+       ON CONFLICT (key) DO UPDATE SET value = $1::jsonb, updated_at = now()`,
+      [JSON.stringify({ hash, salt })]);
+    setSession(res); // keep this device signed in
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(502).json({ error: 'Could not save the new password.', message: e.message });
+  }
 });
 app.post('/api/logout', (req, res) => {
   res.setHeader('Set-Cookie', 'sid=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0');
@@ -153,7 +201,7 @@ app.get('/api/summary', requireAuth, async (req, res) => {
        FROM orders o
        JOIN order_items oi ON oi.order_id = o.id
        JOIN products p ON p.id = oi.product_id
-              WHERE COALESCE(o.status,'') NOT IN ('cancelled','refunded')
+       WHERE COALESCE(o.status,'') NOT IN ('cancelled','refunded')
          AND ${PERTH('o.created_at')}::date BETWEEN $1::date AND $2::date
        GROUP BY 1,2 ORDER BY qty DESC LIMIT 15`, [from, to]);
 
@@ -223,6 +271,33 @@ app.get('/api/meta', requireAuth, async (req, res) => {
   }
 });
 
+/* ------------------------------------------------------- ad spend by day */
+app.get('/api/adspend', requireAuth, async (req, res) => {
+  const token = process.env.META_TOKEN;
+  const acct = process.env.META_AD_ACCOUNT;
+  if (!token || !acct) return res.json({ available: false, reason: 'not_configured' });
+  const { from, to } = range(req);
+  const id = acct.startsWith('act_') ? acct : 'act_' + acct;
+  const url = `https://graph.facebook.com/v21.0/${id}/insights?` + new URLSearchParams({
+    level: 'account',
+    fields: 'spend',
+    time_range: JSON.stringify({ since: from, until: to }),
+    time_increment: '1',
+    limit: '200',
+    access_token: token,
+  });
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(25000) });
+    const j = await r.json();
+    if (j.error) return res.json({ available: false, reason: 'api_error', message: j.error.message });
+    const days = {};
+    (j.data || []).forEach((d) => { if (d.date_start) days[d.date_start] = Number(d.spend) || 0; });
+    res.json({ available: true, days });
+  } catch (e) {
+    res.json({ available: false, reason: 'unreachable', message: e.message });
+  }
+});
+
 /* ---------------------------------------------------------------- stripe */
 app.get('/api/stripe', requireAuth, async (req, res) => {
   const key = process.env.STRIPE_KEY;
@@ -256,6 +331,16 @@ app.put('/api/settings', requireAuth, async (req, res) => {
   for (const k of ['carBalance', 'manualAdSpend', 'stockUnits']) {
     if (body[k] != null && Number.isFinite(Number(body[k]))) clean[k] = Number(body[k]);
   }
+  // Per-day actual supplier invoices and manual adjustments, keyed by trading date.
+  for (const k of ['supplierActual', 'adjust']) {
+    if (body[k] && typeof body[k] === 'object' && !Array.isArray(body[k])) {
+      const map = {};
+      for (const [d, v] of Object.entries(body[k]).slice(0, 400)) {
+        if (/^\d{4}-\d{2}-\d{2}$/.test(d) && Number.isFinite(Number(v))) map[d] = Number(v);
+      }
+      if (Object.keys(map).length) clean[k] = map;
+    }
+  }
   try {
     const r = await pool.query(
       `INSERT INTO dash_settings (key, value, updated_at) VALUES ('dashboard', $1::jsonb, now())
@@ -275,3 +360,4 @@ app.use(express.static(__dirname + '/public', {
 app.get('*', (_req, res) => res.sendFile(__dirname + '/public/index.html'));
 
 app.listen(PORT, () => console.log('listening on ' + PORT));
+
