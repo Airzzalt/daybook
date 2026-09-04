@@ -153,7 +153,8 @@ app.get('/api/summary', requireAuth, async (req, res) => {
        FROM orders o
        JOIN order_items oi ON oi.order_id = o.id
        JOIN products p ON p.id = oi.product_id
-       WHERE ${LIVE} AND ${PERTH('o.created_at')}::date BETWEEN $1::date AND $2::date
+              WHERE COALESCE(o.status,'') NOT IN ('cancelled','refunded')
+         AND ${PERTH('o.created_at')}::date BETWEEN $1::date AND $2::date
        GROUP BY 1,2 ORDER BY qty DESC LIMIT 15`, [from, to]);
 
     res.json({
