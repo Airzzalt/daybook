@@ -88,13 +88,14 @@
     if (busy) return; busy = true;
     $('refresh').disabled = true; $('refresh').textContent = 'Loading';
     var q = '?from=' + S.from + '&to=' + S.to;
-    Promise.allSettled([api('/api/summary' + q), api('/api/meta' + q), api('/api/stripe'), api('/api/settings')])
+    Promise.allSettled([api('/api/summary' + q), api('/api/meta' + q), api('/api/stripe'), api('/api/settings'), api('/api/adspend' + q)])
       .then(function (r) {
         busy = false; $('refresh').disabled = false; $('refresh').textContent = 'Refresh';
         D.summary = r[0].status === 'fulfilled' ? r[0].value : null; D.err.summary = r[0].reason;
         D.meta = r[1].status === 'fulfilled' ? r[1].value : null; D.err.meta = r[1].reason;
         D.stripe = r[2].status === 'fulfilled' ? r[2].value : null;
         D.settings = r[3].status === 'fulfilled' ? (r[3].value || {}) : {};
+        D.adspend = r[4].status === 'fulfilled' ? r[4].value : null;
         $('led-db').className = 'led ' + (D.summary ? 'ok' : 'bad');
         $('led-meta').className = 'led ' + (D.meta && D.meta.available ? 'ok' : '');
         $('led-stripe').className = 'led ' + (D.stripe && D.stripe.available ? 'ok' : '');
@@ -145,16 +146,106 @@
 
   /* -------------------------------------------------------------- render */
   function render() {
-    ['overview', 'ads', 'money', 'stock', 'settings'].forEach(function (v) { $('v-' + v).hidden = v !== S.view; });
+    ['overview', 'alloc', 'ads', 'money', 'stock', 'settings'].forEach(function (v) { $('v-' + v).hidden = v !== S.view; });
     Array.prototype.forEach.call($('nav').querySelectorAll('a'), function (a) {
       if (a.dataset.v === S.view) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
     });
     var t = crunch();
     if (S.view === 'overview') overview(t);
+    else if (S.view === 'alloc') allocView(t);
     else if (S.view === 'ads') ads(t);
     else if (S.view === 'money') moneyView(t);
     else if (S.view === 'stock') stockView(t);
     else settings();
+  }
+
+  /* ---- allocations ----------------------------------------------------- */
+  // Stripe pays out two business days after the trading day, and never on a
+  // weekend: Thu/Fri/Sat land Mon/Tue/Wed, Sun and Mon both land Wednesday.
+  function payoutDay(iso) {
+    var add = { 4: 4, 5: 4, 6: 4, 0: 3, 1: 2, 2: 2, 3: 2 }[new Date(iso + 'T12:00:00Z').getUTCDay()];
+    return shift(iso, add);
+  }
+  function daySpend(iso) {
+    if (D.adspend && D.adspend.available && D.adspend.days[iso] != null) return n(D.adspend.days[iso]);
+    if (D.settings && D.settings.manualAdSpend != null) return n(D.settings.manualAdSpend);
+    return null;
+  }
+  function groupPayouts(daily) {
+    var g = {};
+    daily.forEach(function (r) {
+      var p = payoutDay(r.day);
+      if (!g[p]) g[p] = { pay: p, days: [], revenue: 0, bottles: 0, minis: 0, ads: 0, adsKnown: true, orders: 0 };
+      var b = g[p];
+      b.days.push(r.day); b.revenue += n(r.revenue); b.bottles += n(r.bottles); b.minis += n(r.minis); b.orders += n(r.orders);
+      var s = daySpend(r.day);
+      if (s == null) b.adsKnown = false; else b.ads += s;
+    });
+    return Object.keys(g).sort().reverse().map(function (k) { return g[k]; });
+  }
+
+  function allocView(t) {
+    var host = $('v-alloc');
+    if (!t) return dbDown(host);
+    var groups = groupPayouts(t.daily);
+    var actual = (D.settings && D.settings.supplierActual) || {};
+    var h = head('Allocations', rangeLabel());
+    h += '<div class="note ok" style="margin-bottom:14px"><div><b>What to move when each payout lands.</b>' +
+      'Supplier cost is estimated from the bottle count until you type in what she actually invoiced. ' +
+      'Refunds and anything unusual are not in here — they come out of Operating.</div></div>';
+    if (!groups.length) h += '<div class="card"><div class="empty">No trade in this range.</div></div>';
+
+    groups.forEach(function (g, i) {
+      var fees = g.revenue * FEE_RATE;
+      var lands = g.revenue - fees;
+      var est = g.bottles * COGS_BOTTLE + g.minis * COGS_MINI;
+      var sup = actual[g.pay] != null ? n(actual[g.pay]) : est;
+      var isActual = actual[g.pay] != null;
+      var gst = g.days.some(function (d) { return d >= GST_FROM; }) ? lands / 11 : 0;
+      var net = g.revenue - sup - fees - g.ads - gst;
+      var carRate = g.days[0] >= ALLOC_SWITCH ? 0.65 : 0.45;
+      var stRate = g.days[0] >= ALLOC_SWITCH ? 0 : 0.20;
+      var car = net * carRate, st = net * stRate, op = net - car - st;
+      var from = g.days.length === 1 ? dw(g.days[0]) + ' ' + md(g.days[0])
+        : g.days.map(function (d) { return dw(d); }).join(', ') + ' ' + md(g.days[0]) + '–' + md(g.days[g.days.length - 1]);
+
+      h += '<div class="pay' + (i === 0 ? ' next' : '') + '">' +
+        '<div class="payhead"><span class="d">' + dw(g.pay) + ' ' + md(g.pay) + '</span>' +
+        '<span class="f">from ' + from + ' · ' + g.orders + ' orders</span>' +
+        '<span class="amt">' + money(lands, 2) + ' lands</span></div>' +
+
+        line('Revenue', 'before fees', money(g.revenue, 2), '') +
+        line('Processing fees', '5.1% estimate', '−' + money(fees, 2), 'out') +
+
+        '<div class="ln out"><div class="lt"><b>Pay the supplier</b><em>' +
+        (isActual ? 'her invoice' : g.bottles + ' bottles' + (g.minis ? ' + ' + g.minis + ' miniatures' : '') + ' · estimate') +
+        (isActual ? '<span class="tick">actual</span>' : '') + '</em></div>' +
+        '<div class="lv"><input type="number" step="0.01" data-sup="' + g.pay + '" value="' + (isActual ? sup.toFixed(2) : '') +
+        '" placeholder="' + est.toFixed(2) + '" aria-label="Actual supplier invoice"></div></div>' +
+
+        line('Move to the GST account', 'revenue less fees ÷ 11', '−' + money(gst, 2), 'out') +
+        line('Ad spend', g.adsKnown ? 'already paid to Meta' : 'not known for these days', g.adsKnown ? '−' + money(g.ads, 2) : '—', 'out') +
+
+        '<div class="ln net"><div class="lt"><b>Net</b><em>what actually splits</em></div><div class="lv">' + money(net, 2) + '</div></div>' +
+        '<div class="ln move car"><div class="lt"><b>→ Car account</b><em>' + Math.round(carRate * 100) + '%</em></div><div class="lv">' + money(car, 2) + '</div></div>' +
+        '<div class="ln move"><div class="lt"><b>→ Stock account</b><em>' + Math.round(stRate * 100) + '%</em></div><div class="lv">' + money(st, 2) + '</div></div>' +
+        '<div class="ln move"><div class="lt"><b>→ Operating</b><em>' + Math.round((1 - carRate - stRate) * 100) + '% · ads, refunds, you</em></div><div class="lv">' + money(op, 2) + '</div></div>' +
+        '</div>';
+    });
+    host.innerHTML = h;
+
+    Array.prototype.forEach.call(host.querySelectorAll('input[data-sup]'), function (inp) {
+      inp.addEventListener('change', function () {
+        var map = Object.assign({}, (D.settings && D.settings.supplierActual) || {});
+        if (inp.value === '') delete map[inp.dataset.sup]; else map[inp.dataset.sup] = Number(inp.value);
+        D.settings.supplierActual = map;
+        allocView(crunch());
+        api('/api/settings', { method: 'PUT', body: JSON.stringify({ supplierActual: map }) }).catch(function () {});
+      });
+    });
+  }
+  function line(label, sub, val, cls) {
+    return '<div class="ln ' + cls + '"><div class="lt"><b>' + label + '</b><em>' + esc(sub) + '</em></div><div class="lv">' + val + '</div></div>';
   }
   function head(title, meta) {
     return '<div class="phead"><h2>' + esc(title) + '</h2><span class="meta">' + esc(meta) + '</span></div>';
@@ -194,9 +285,9 @@
 
     h += '<div class="card"><h3>Daily trade' + (t.daily.length > 1 ? '<span class="r">' + bestLine(t) + '</span>' : '') + '</h3>' +
       chart(t.daily) + dailyTable(t) + '</div>';
-    h += '<div class="card"><h3>Funnel<span class="r">Where people fall out between ad and order</span></h3><div class="pad">' + funnel(t) + '</div></div>';
-    if (D.summary.products && D.summary.products.length) h += productsCard();
-    host.innerHTML = h;
+    h += '<div class="duo"><div class="card"><h3>Funnel<span class="r">Where people fall out between ad and order</span></h3><div class="pad">' + funnel(t) + '</div></div>';
+    h += (D.summary.products && D.summary.products.length ? productsCard() : '') + '</div>';
+    host.innerHTML = '<div class="inner">' + h + '</div>';
   }
   function bestLine(t) {
     var b = t.daily.reduce(function (a, c) { return n(c.revenue) > n(a.revenue) ? c : a; });
@@ -205,13 +296,15 @@
   function chart(daily) {
     if (daily.length < 2) return '<div class="empty">One day selected — widen the range to see the trend.</div>';
     var narrow = window.innerWidth < 700;
-    var W = 900, H = narrow ? 420 : 220, L = narrow ? 78 : 54, R = 12, T = 12, B = narrow ? 56 : 34;
+    var W = narrow ? 440 : 900, H = narrow ? 330 : 220;
+    var L = narrow ? 44 : 54, R = 10, T = 12, B = narrow ? 40 : 34;
     var iw = W - L - R, ih = H - T - B;
-    var fs = narrow ? 17 : 10.5, fs2 = narrow ? 15 : 9.5;
+    var fs = narrow ? 12 : 10.5, fs2 = narrow ? 10.5 : 9.5;
     var max = Math.max.apply(null, daily.map(function (r) { return n(r.revenue); })); if (max <= 0) max = 1;
     var st = Math.pow(10, Math.floor(Math.log(max) / Math.LN10));
     var tick = Math.ceil(max / 4 / st) * st, top = tick * 4;
-    var bw = iw / daily.length, cw = Math.max(3, Math.min(38, bw * 0.58));
+    var bw = iw / daily.length, cw = Math.max(3, Math.min(narrow ? 26 : 38, bw * 0.58));
+    var every = Math.ceil(daily.length / (narrow ? 5 : 11));
     var s = '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Daily revenue and contribution">';
     for (var i = 0; i <= 4; i++) {
       var y = T + ih - ih * i / 4;
@@ -232,7 +325,7 @@
     daily.forEach(function (r, i) {
       if (i % every !== 0 && i !== daily.length - 1) return;
       var x = (L + bw * i + bw / 2).toFixed(1);
-      s += '<text x="' + x + '" y="' + (H - (narrow ? 30 : 14)) + '" text-anchor="middle" font-size="' + fs + '" fill="var(--text-3)">' + md(r.day) + '</text>';
+      s += '<text x="' + x + '" y="' + (H - (narrow ? 22 : 14)) + '" text-anchor="middle" font-size="' + fs + '" fill="var(--text-3)">' + md(r.day) + '</text>';
       s += '<text x="' + x + '" y="' + (H - (narrow ? 8 : 3)) + '" text-anchor="middle" font-size="' + fs2 + '" fill="var(--text-3)" opacity=".65">' + dw(r.day) + '</text>';
     });
     s += '</svg>';
@@ -430,6 +523,19 @@
       '<div class="foot">Used only while the ad platform is not connected. It is multiplied by the number of days in the range.</div>' +
       '<div class="field"><button class="btn p" id="save">Save</button><span id="saved" class="dim"></span></div>' +
       '</div></div>';
+    h += '<div class="card"><h3>Password<span class="r">Changing it signs out your other devices</span></h3><div class="pad">' +
+      '<div class="field" style="margin-top:0"><label for="pw-cur" style="width:190px">Current password</label>' +
+      '<input type="password" id="pw-cur" autocomplete="current-password"></div>' +
+      '<div class="field"><label for="pw-new" style="width:190px">New password</label>' +
+      '<input type="password" id="pw-new" autocomplete="new-password" placeholder="8 characters or more"></div>' +
+      '<div class="field"><label for="pw-two" style="width:190px">Repeat it</label>' +
+      '<input type="password" id="pw-two" autocomplete="new-password"></div>' +
+      '<div class="field"><button class="btn p" id="pwsave">Change password</button><span id="pwmsg" class="dim"></span></div>' +
+      '</div></div>';
+    h += '<div class="card"><h3>Session</h3><div class="pad"><div class="foot" style="margin:0 0 10px">' +
+      'Signing in lasts 180 days and renews every time you open the dashboard, so you should not have to type the password again on a device you use.' +
+      '</div><div class="field" style="margin-top:0">' +
+      '<button class="btn" id="signout2">Sign out</button></div></div></div>';
     h += '<div class="card"><h3>Connections</h3><div class="pad"><div class="rowlist">' +
       conn('Database', true, 'Orders, products, carts and tags') +
       conn('Ad platform', connected, connected ? 'Spend, reach and the funnel above the cart' : 'Set META_TOKEN and META_AD_ACCOUNT in the service environment') +
@@ -453,6 +559,25 @@
         D.settings = v || {}; $('saved').textContent = 'Saved to all your devices.';
         setTimeout(function () { $('saved').textContent = ''; }, 2500);
       }).catch(function () { $('saved').textContent = 'Could not save.'; });
+    });
+    $('signout2').addEventListener('click', function () {
+      fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }).then(showGate);
+    });
+    $('pwsave').addEventListener('click', function () {
+      var cur = $('pw-cur').value, nw = $('pw-new').value, tw = $('pw-two').value;
+      var msg = $('pwmsg');
+      msg.style.color = '';
+      if (!cur) { msg.textContent = 'Type your current password.'; return; }
+      if (nw.length < 8) { msg.textContent = 'New password needs 8 characters or more.'; return; }
+      if (nw !== tw) { msg.textContent = 'The two new passwords do not match.'; return; }
+      msg.textContent = 'Saving…';
+      api('/api/password', { method: 'POST', body: JSON.stringify({ current: cur, next: nw }) })
+        .then(function () {
+          $('pw-cur').value = $('pw-new').value = $('pw-two').value = '';
+          msg.textContent = 'Password changed.';
+          setTimeout(function () { msg.textContent = ''; }, 3000);
+        })
+        .catch(function (e) { msg.textContent = (e && e.error) || 'Could not change it.'; });
     });
   }
   function conn(name, ok, note) {

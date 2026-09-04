@@ -75,11 +75,14 @@ button,input,select{font:inherit}
   position:sticky; top:0; z-index:40; background:var(--nav); color:var(--nav-text);
   display:flex; align-items:center; gap:12px; padding:8px 14px;
   padding-top:calc(8px + env(safe-area-inset-top));
-  min-height:52px; flex-wrap:wrap;
+  min-height:52px;
 }
+.tbrow{display:flex; align-items:center; gap:10px; min-width:0;}
+.tbtop{flex:1; min-width:0;}
+.tbbot{flex:none; margin-left:auto;}
 .mark{width:26px;height:26px;border-radius:7px;background:var(--nav-2);display:grid;place-items:center;flex:none}
-.topbar .spacer{flex:1}
-.seg{display:flex; gap:1px; background:var(--nav-2); border-radius:8px; padding:2px; overflow:auto;}
+.seg{display:flex; gap:1px; background:var(--nav-2); border-radius:8px; padding:2px; overflow-x:auto; scrollbar-width:none; -webkit-overflow-scrolling:touch;}
+.seg::-webkit-scrollbar{display:none}
 .seg button{border:0; background:transparent; color:var(--nav-dim); padding:5px 10px; border-radius:6px; font-size:12.5px; font-weight:500; cursor:pointer; white-space:nowrap; min-height:28px;}
 .seg button:hover{color:var(--nav-text)}
 .seg button[aria-pressed="true"]{background:var(--nav-text); color:var(--nav); font-weight:600;}
@@ -97,7 +100,7 @@ button,input,select{font:inherit}
 .led.ok{background:#22C55E} .led.bad{background:#EF4444}
 
 .shell{display:grid; grid-template-columns:206px 1fr; min-height:calc(100dvh - 52px);}
-.side{border-right:1px solid var(--border); background:var(--surface); padding:10px 8px;}
+.side{border-right:1px solid var(--border); background:var(--surface); padding:10px 8px; align-self:start; position:sticky; top:52px; max-height:calc(100dvh - 52px); overflow-y:auto;}
 .side a{
   display:flex; align-items:center; gap:9px; padding:7px 9px; border-radius:var(--r);
   color:var(--text-2); text-decoration:none; font-weight:500; font-size:13px; margin-bottom:1px; cursor:pointer;
@@ -107,11 +110,52 @@ button,input,select{font:inherit}
 .side a svg{flex:none; opacity:.75}
 .side .grp{font-size:11px; font-weight:600; color:var(--text-3); padding:12px 9px 5px; letter-spacing:.02em;}
 .main{padding:18px 20px 56px; min-width:0;}
+.inner{max-width:1380px}
+/* Desktop only: sit the two narrow cards side by side instead of stacking. */
+.duo{display:grid; gap:14px}
+@media (min-width:1200px){
+  .duo{grid-template-columns:1fr 1fr; align-items:start}
+  .main{padding:22px 26px 64px}
+  .kpis{gap:12px}
+  .kpi{padding:14px 16px} .kpi .v{font-size:26px}
+  .card > h3{padding:15px 18px 12px; font-size:14px}
+  .pad{padding:0 18px 18px}
+  th:first-child,td:first-child{padding-left:18px} th:last-child,td:last-child{padding-right:18px}
+}
+@media (min-width:1560px){ .kpis{grid-template-columns:repeat(8,1fr)} }
 @media (max-width:840px){
-  .shell{grid-template-columns:1fr}
-  .side{display:flex; gap:4px; overflow-x:auto; border-right:0; border-bottom:1px solid var(--border); padding:7px 10px; position:sticky; top:52px; z-index:30;}
-  .side a{white-space:nowrap; margin:0} .side .grp{display:none}
-  .main{padding:14px 12px 48px}
+  .topbar{position:static; flex-wrap:wrap; gap:8px; padding:8px 12px; padding-top:calc(8px + env(safe-area-inset-top));}
+  .tbrow{width:100%}
+  .tbtop{gap:8px}
+  .tbbot{margin-left:0; gap:8px}
+  .dates{flex:1; min-width:0; gap:4px}
+  .topbar input[type=date]{flex:1; min-width:0; min-height:38px; text-align:center}
+  .tbtn{min-height:38px; padding:8px 16px}
+  .hide-sm{display:none}
+  .seg button{min-height:36px; padding:7px 13px; font-size:13.5px}
+
+  .shell{grid-template-columns:1fr; grid-template-rows:auto 1fr; min-height:0}
+  .side{
+    display:flex; align-items:center; gap:3px; overflow-x:auto; scrollbar-width:none;
+    border-right:0; border-bottom:1px solid var(--border); padding:6px 10px;
+    position:sticky; top:0; z-index:30; -webkit-overflow-scrolling:touch;
+  }
+  .side::-webkit-scrollbar{display:none}
+  .side a{white-space:nowrap; margin:0; flex:none; min-height:38px; padding:8px 12px; font-size:13.5px}
+  .side .grp{display:none}
+  .main{padding:14px 12px calc(48px + env(safe-area-inset-bottom))}
+
+  .phead h2{font-size:22px}
+  .kpi{padding:13px 14px} .kpi .v{font-size:26px}
+  th{padding:9px 10px; font-size:11.5px} td{padding:11px 10px; font-size:13px}
+  th:first-child,td:first-child{padding-left:14px} th:last-child,td:last-child{padding-right:14px}
+  .card > h3{font-size:15px; padding:14px 14px 11px}
+  .card > h3 .r{float:none; display:block; margin-top:3px; font-size:12.5px}
+  .pad{padding:0 14px 16px}
+  .mi .v{font-size:21px}
+  .rl{padding:12px 13px} .rl .a{font-size:19px}
+  .rl .t em{display:block; margin:2px 0 0}
+  .note{font-size:13px}
 }
 
 /* ---------------- page ---------------- */
@@ -188,6 +232,26 @@ td .s{color:var(--text-3); font-size:11.5px; font-weight:400}
 
 .field{display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:12px; font-size:12.5px; color:var(--text-2)}
 .field input{padding:7px 10px; border:1px solid var(--border-2); border-radius:var(--r); background:var(--surface); color:var(--text); width:130px; color-scheme:light dark;}
+
+/* ---------------- allocations ---------------- */
+.pay{background:var(--surface); border:1px solid var(--border); border-radius:12px; margin-bottom:14px; overflow:hidden}
+.pay.next{border-color:var(--brand); box-shadow:0 0 0 1px var(--brand)}
+.payhead{padding:14px 16px; border-bottom:1px solid var(--border); display:flex; align-items:baseline; gap:10px; flex-wrap:wrap}
+.payhead .d{font-size:16px; font-weight:650; letter-spacing:-.012em}
+.payhead .f{color:var(--text-2); font-size:12.5px}
+.payhead .amt{margin-left:auto; font-size:18px; font-weight:650}
+@media (max-width:640px){.payhead .amt{margin-left:0; width:100%}}
+.ln{display:grid; grid-template-columns:1fr auto; gap:10px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--border); font-size:13.5px}
+.ln .lt{color:var(--text-2)} .ln .lt b{color:var(--text); font-weight:600; display:block}
+.ln .lt em{font-style:normal; font-size:11.5px; color:var(--text-3)}
+.ln .lv{font-weight:600; font-size:15px; white-space:nowrap}
+.ln.out .lv{color:var(--bad-t)}
+.ln.net{background:var(--sunken)} .ln.net .lv{font-size:19px; font-weight:700}
+.ln.move{padding-left:28px} .ln.move .lv{color:var(--text)}
+.ln.move.car{background:var(--brand-bg)} .ln.move.car .lv{color:var(--brand); font-size:17px}
+.ln:last-child{border-bottom:0}
+.ln input{width:104px; padding:5px 8px; border:1px solid var(--border-2); border-radius:6px; background:var(--surface); color:var(--text); text-align:right; font-size:13px}
+.tick{font-size:11px; font-weight:600; padding:1px 7px; border-radius:7px; background:var(--ok-b); color:var(--ok-t); margin-left:6px}
 .btn{padding:7px 13px; border:1px solid var(--border-2); border-radius:var(--r); background:var(--surface); color:var(--text); font-weight:600; font-size:12.5px; cursor:pointer;}
 .btn:hover{background:var(--sunken)}
 .btn.p{background:var(--nav); border-color:var(--nav); color:#fff}
@@ -218,31 +282,35 @@ svg.chart{display:block;width:100%;height:auto}
 
 <div id="app" hidden>
   <header class="topbar">
-    <div class="mark"><svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 11.5 5.5 7l3 3L14 4" stroke="#E3E3E3" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-    <div class="seg" id="presets" role="group" aria-label="Date range">
-      <button data-p="today">Today</button>
-      <button data-p="yday">Yesterday</button>
-      <button data-p="7">7d</button>
-      <button data-p="14">14d</button>
-      <button data-p="30">30d</button>
-      <button data-p="mtd">Month</button>
-      <button data-p="lastmo">Last month</button>
+    <div class="tbrow tbtop">
+      <div class="mark"><svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 11.5 5.5 7l3 3L14 4" stroke="#E3E3E3" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div class="seg" id="presets" role="group" aria-label="Date range">
+        <button data-p="today">Today</button>
+        <button data-p="yday">Yesterday</button>
+        <button data-p="7">7d</button>
+        <button data-p="14">14d</button>
+        <button data-p="30">30d</button>
+        <button data-p="mtd">Month</button>
+        <button data-p="lastmo">Last month</button>
+      </div>
     </div>
-    <div class="dates">
-      <input type="date" id="from" aria-label="From"><span>–</span><input type="date" id="to" aria-label="To">
+    <div class="tbrow tbbot">
+      <div class="dates">
+        <input type="date" id="from" aria-label="From"><span>–</span><input type="date" id="to" aria-label="To">
+      </div>
+      <div class="health" title="Data sources">
+        <span class="led" id="led-db"></span><span class="led" id="led-meta"></span><span class="led" id="led-stripe"></span>
+      </div>
+      <button class="tbtn" id="refresh">Refresh</button>
+      <button class="tbtn ghost hide-sm" id="signout">Sign out</button>
     </div>
-    <div class="spacer"></div>
-    <div class="health" title="Data sources">
-      <span class="led" id="led-db"></span><span class="led" id="led-meta"></span><span class="led" id="led-stripe"></span>
-    </div>
-    <button class="tbtn" id="refresh">Refresh</button>
-    <button class="tbtn ghost" id="signout">Sign out</button>
   </header>
 
   <div class="shell">
     <nav class="side" id="nav">
       <div class="grp">Reports</div>
       <a data-v="overview" aria-current="page"><svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 13V7m4 6V3m4 10V8m4 5v-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>Overview</a>
+      <a data-v="alloc"><svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M8 2v12M8 2 4.5 5.5M8 2l3.5 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.5 13.5h11" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>Allocations</a>
       <a data-v="ads"><svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2.5 6.5h3l5-3.5v10l-5-3.5h-3z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M13 5.5a3.5 3.5 0 0 1 0 5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>Ads</a>
       <a data-v="money"><svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="2" y="4" width="12" height="8.5" rx="2" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="8.25" r="1.7" stroke="currentColor" stroke-width="1.4"/></svg>Money</a>
       <a data-v="stock"><svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2.5 5.5 8 2.5l5.5 3v5L8 13.5l-5.5-3z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M2.5 5.5 8 8.5m0 0 5.5-3M8 8.5v5" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>Stock</a>
@@ -252,6 +320,7 @@ svg.chart{display:block;width:100%;height:auto}
 
     <main class="main">
       <div id="v-overview"></div>
+      <div id="v-alloc" hidden></div>
       <div id="v-ads" hidden></div>
       <div id="v-money" hidden></div>
       <div id="v-stock" hidden></div>
