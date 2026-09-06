@@ -341,6 +341,20 @@ app.put('/api/settings', requireAuth, async (req, res) => {
       if (Object.keys(map).length) clean[k] = map;
     }
   }
+  // Allocation splits: a switch date plus car/stock percentages either side of it.
+  if (body.alloc && typeof body.alloc === 'object' && !Array.isArray(body.alloc)) {
+    const a = body.alloc, out = {};
+    if (/^\d{4}-\d{2}-\d{2}$/.test(a.switchDate || '')) out.switchDate = a.switchDate;
+    for (const side of ['before', 'after']) {
+      const s = a[side];
+      if (s && typeof s === 'object') {
+        const car = Number(s.car), stock = Number(s.stock);
+        if (Number.isFinite(car) && Number.isFinite(stock) &&
+            car >= 0 && stock >= 0 && car + stock <= 100) out[side] = { car, stock };
+      }
+    }
+    if (out.switchDate && out.before && out.after) clean.alloc = out;
+  }
   try {
     const r = await pool.query(
       `INSERT INTO dash_settings (key, value, updated_at) VALUES ('dashboard', $1::jsonb, now())
@@ -360,4 +374,3 @@ app.use(express.static(__dirname + '/public', {
 app.get('*', (_req, res) => res.sendFile(__dirname + '/public/index.html'));
 
 app.listen(PORT, () => console.log('listening on ' + PORT));
-
