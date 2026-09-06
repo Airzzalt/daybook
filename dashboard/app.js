@@ -4,7 +4,16 @@
   var COGS_BOTTLE = 37.50, COGS_MINI = 9.80, FEE_RATE = 0.051;
   var GST_FROM = '2026-08-18', BREAKEVEN_CPA = 132, CAR_TARGET = 35000;
   var SHUTDOWN_START = '2026-09-25', SHUTDOWN_END = '2026-10-08';
-  var ALLOC_SWITCH = '2026-09-08';
+  var ALLOC_DEFAULT = { switchDate: '2026-09-08', before: { car: 45, stock: 20 }, after: { car: 65, stock: 0 } };
+  function allocCfg() {
+    var a = D.settings && D.settings.alloc;
+    if (!a || !a.switchDate || !a.before || !a.after) return ALLOC_DEFAULT;
+    return a;
+  }
+  function allocFor(day) {
+    var a = allocCfg(), s = day >= a.switchDate ? a.after : a.before;
+    return { car: (Number(s.car) || 0) / 100, stock: (Number(s.stock) || 0) / 100 };
+  }
   var TZ = 'Australia/Perth';
 
   var S = { from: '', to: '', preset: 'today', view: 'overview' };
@@ -115,8 +124,9 @@
       t.orders += n(r.orders); t.revenue += rev; t.bottles += b; t.minis += m;
       t.gst += gst; t.cogs += cogs; t.fees += fees;
       r._c = rev - gst - cogs - fees;
-      r._car = r.day >= ALLOC_SWITCH ? 0.65 : 0.45;
-      r._st = r.day >= ALLOC_SWITCH ? 0 : 0.20;
+      var _a = allocFor(r.day);
+      r._car = _a.car;
+      r._st = _a.stock;
     });
     t.contrib = t.revenue - t.gst - t.cogs - t.fees;
     t.aov = t.orders ? t.revenue / t.orders : 0;
@@ -189,8 +199,13 @@
     if (!t) return dbDown(host);
     var groups = groupPayouts(t.daily);
     var actual = (D.settings && D.settings.supplierActual) || {};
-    var h = head('Allocations', rangeLabel());
+    var _ac = allocCfg();
+    var h = '<div class="phead"><h2>Allocations</h2><span class="meta">' + esc(rangeLabel()) + '</span>' +
+      '<button type="button" id="alloc-edit" class="btn-sm">Edit splits</button></div>';
     h += '<div class="note ok" style="margin-bottom:14px"><div><b>What to move when each payout lands.</b>' +
+      'Car ' + _ac.before.car + ' / Stock ' + _ac.before.stock + ' / Operating ' + (100 - _ac.before.car - _ac.before.stock) +
+      ' before ' + md(_ac.switchDate) + ', then ' + _ac.after.car + ' / ' + _ac.after.stock + ' / ' +
+      (100 - _ac.after.car - _ac.after.stock) + '. ' +
       'Supplier cost is estimated from the bottle count until you type in what she actually invoiced. ' +
       'Refunds and anything unusual are not in here — they come out of Operating.</div></div>';
     if (!groups.length) h += '<div class="card"><div class="empty">No trade in this range.</div></div>';
@@ -203,8 +218,8 @@
       var isActual = actual[g.pay] != null;
       var gst = g.days.some(function (d) { return d >= GST_FROM; }) ? lands / 11 : 0;
       var net = g.revenue - sup - fees - g.ads - gst;
-      var carRate = g.days[0] >= ALLOC_SWITCH ? 0.65 : 0.45;
-      var stRate = g.days[0] >= ALLOC_SWITCH ? 0 : 0.20;
+      var _ga = allocFor(g.days[0]);
+      var carRate = _ga.car, stRate = _ga.stock;
       var car = net * carRate, st = net * stRate, op = net - car - st;
       var from = g.days.length === 1 ? dw(g.days[0]) + ' ' + md(g.days[0])
         : g.days.map(function (d) { return dw(d); }).join(', ') + ' ' + md(g.days[0]) + '–' + md(g.days[g.days.length - 1]);
@@ -233,6 +248,9 @@
         '</div>';
     });
     host.innerHTML = h;
+
+    var eb = $('alloc-edit');
+    if (eb) eb.addEventListener('click', openAllocModal);
 
     Array.prototype.forEach.call(host.querySelectorAll('input[data-sup]'), function (inp) {
       inp.addEventListener('change', function () {
@@ -511,6 +529,55 @@
     host.innerHTML = h;
   }
 
+  /* ---- allocation modal ---- */
+  function openAllocModal() {
+    var c = allocCfg();
+    $('am-date').value = c.switchDate;
+    $('am-bcar').value = c.before.car;
+    $('am-bst').value = c.before.stock;
+    $('am-acar').value = c.after.car;
+    $('am-ast').value = c.after.stock;
+    $('am-msg').textContent = '';
+    amSums();
+    $('alloc-modal').hidden = false;
+    document.body.style.overflow = 'hidden';
+    setTimeout(function () { $('am-bcar').focus(); }, 30);
+  }
+  function closeAllocModal() {
+    $('alloc-modal').hidden = true;
+    document.body.style.overflow = '';
+  }
+  function amSums() {
+    [['b', 'am-bcar', 'am-bst', 'am-bop'], ['a', 'am-acar', 'am-ast', 'am-aop']].forEach(function (g) {
+      var car = Number($(g[1]).value) || 0, st = Number($(g[2]).value) || 0, op = 100 - car - st;
+      var el = $(g[3]);
+      el.textContent = op + '%';
+      el.className = 'amop' + (op < 0 ? ' bad' : '');
+    });
+  }
+  function saveAlloc() {
+    var body = {
+      alloc: {
+        switchDate: $('am-date').value,
+        before: { car: Number($('am-bcar').value) || 0, stock: Number($('am-bst').value) || 0 },
+        after: { car: Number($('am-acar').value) || 0, stock: Number($('am-ast').value) || 0 },
+      },
+    };
+    var bad = null;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(body.alloc.switchDate)) bad = 'Pick a switch date.';
+    else if (body.alloc.before.car + body.alloc.before.stock > 100) bad = 'The first split adds up to more than 100%.';
+    else if (body.alloc.after.car + body.alloc.after.stock > 100) bad = 'The second split adds up to more than 100%.';
+    if (bad) { $('am-msg').textContent = bad; return; }
+    $('am-msg').textContent = 'Saving…';
+    api('/api/settings', { method: 'PUT', body: JSON.stringify(body) })
+      .then(function (s) {
+        D.settings = s || D.settings;
+        closeAllocModal();
+        allocView(crunch());
+      })
+      .catch(function (e) { $('am-msg').textContent = (e && e.error) || 'Could not save it.'; });
+  }
+
   /* ---- settings ---- */
   function settings() {
     var s = D.settings || {};
@@ -585,6 +652,18 @@
   }
 
   /* ----------------------------------------------------------------- wire */
+  ['am-bcar', 'am-bst', 'am-acar', 'am-ast'].forEach(function (id) {
+    $(id).addEventListener('input', amSums);
+  });
+  $('am-save').addEventListener('click', saveAlloc);
+  $('am-cancel').addEventListener('click', closeAllocModal);
+  $('alloc-modal').addEventListener('click', function (e) {
+    if (e.target && e.target.id === 'alloc-modal') closeAllocModal();
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && !$('alloc-modal').hidden) closeAllocModal();
+  });
+
   $('presets').addEventListener('click', function (e) {
     var b = e.target.closest('button'); if (!b) return; setRange(b.dataset.p); load();
   });
