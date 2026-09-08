@@ -366,6 +366,11 @@ app.put('/api/settings', requireAuth, async (req, res) => {
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
+/* MCP server — lets Claude and ChatGPT read the same numbers this dashboard
+   shows, with the same constants. Auth is its own bearer token (MCP_TOKEN),
+   separate from the dashboard password. Read-only. */
+require('./mcp')(app, pool);
+
 app.use(express.static(__dirname + '/public', {
   setHeaders(res, path) {
     if (path.endsWith('sw.js')) res.setHeader('Cache-Control', 'no-cache');
