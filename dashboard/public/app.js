@@ -21,6 +21,14 @@
   var busy = false, timer = null;
 
   function $(id) { return document.getElementById(id); }
+  /* Attach a listener only if the element exists. A stale index.html that is
+     missing one element must never take the whole dashboard down with it. */
+  function on(id, ev, fn) {
+    var el = $(id);
+    if (el) el.addEventListener(ev, fn);
+    else if (window.console) console.warn('[daybook] missing element #' + id + ' — index.html may be out of date');
+    return !!el;
+  }
   function el(t, c, x) { var e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   function n(v) { var x = Number(v); return isFinite(x) ? x : 0; }
@@ -44,7 +52,7 @@
   function showGate() { $('gate').hidden = false; $('app').hidden = true; }
   function showApp() { $('gate').hidden = true; $('app').hidden = false; }
 
-  $('gateform').addEventListener('submit', function (e) {
+  on('gateform', 'submit', function (e) {
     e.preventDefault();
     $('gateerr').textContent = '';
     fetch('/api/login', {
@@ -58,7 +66,7 @@
       })
       .catch(function () { $('gateerr').textContent = 'Network problem. Try again.'; });
   });
-  $('signout').addEventListener('click', function () {
+  on('signout', 'click', function () {
     fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }).then(showGate);
   });
 
@@ -653,30 +661,32 @@
 
   /* ----------------------------------------------------------------- wire */
   ['am-bcar', 'am-bst', 'am-acar', 'am-ast'].forEach(function (id) {
-    $(id).addEventListener('input', amSums);
+    on(id, 'input', amSums);
   });
-  $('am-save').addEventListener('click', saveAlloc);
-  $('am-cancel').addEventListener('click', closeAllocModal);
-  $('alloc-modal').addEventListener('click', function (e) {
+  on('am-save', 'click', saveAlloc);
+  on('am-cancel', 'click', closeAllocModal);
+  on('alloc-modal', 'click', function (e) {
     if (e.target && e.target.id === 'alloc-modal') closeAllocModal();
   });
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && !$('alloc-modal').hidden) closeAllocModal();
+    var m = $('alloc-modal');
+    if (e.key === 'Escape' && m && !m.hidden) closeAllocModal();
   });
 
-  $('presets').addEventListener('click', function (e) {
+  on('presets', 'click', function (e) {
     var b = e.target.closest('button'); if (!b) return; setRange(b.dataset.p); load();
   });
-  $('from').addEventListener('change', function () { custom(); load(); });
-  $('to').addEventListener('change', function () { custom(); load(); });
-  $('refresh').addEventListener('click', function () { load(); });
-  $('nav').addEventListener('click', function (e) {
+  on('from', 'change', function () { custom(); load(); });
+  on('to', 'change', function () { custom(); load(); });
+  on('refresh', 'click', function () { load(); });
+  on('nav', 'click', function (e) {
     var a = e.target.closest('a'); if (!a) return;
     e.preventDefault(); S.view = a.dataset.v; render();
     window.scrollTo({ top: 0, behavior: 'instant' });
   });
   document.addEventListener('visibilitychange', function () {
-    if (document.visibilityState === 'visible' && S.preset === 'today' && !$('app').hidden) {
+    var appEl = $('app');
+    if (document.visibilityState === 'visible' && S.preset === 'today' && appEl && !appEl.hidden) {
       if (S.to !== today()) setRange('today');
       load();
     }
@@ -685,7 +695,8 @@
   function boot() { setRange('today'); load(); }
 
   ['v-overview', 'v-ads', 'v-money', 'v-stock', 'v-settings'].forEach(function (id) {
-    $(id).innerHTML = '<div class="card"><div class="skel"></div><div class="skel" style="width:60%"></div></div>';
+    var el = $(id);
+    if (el) el.innerHTML = '<div class="card"><div class="skel"></div><div class="skel" style="width:60%"></div></div>';
   });
 
   fetch('/api/me', { credentials: 'same-origin' }).then(function (r) { return r.json(); })
