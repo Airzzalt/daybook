@@ -271,6 +271,59 @@ app.get('/api/meta', requireAuth, async (req, res) => {
   }
 });
 
+/* ------------------------------------------------------ one day, by hour */
+// Orders for a single day and the day before it, bucketed by Perth hour, so the
+// dashboard can draw today against yesterday. Ad spend by hour comes from Meta's
+// hourly breakdown when it is connected; if not, that part is simply left out.
+app.get('/api/hourly', requireAuth, async (req, res) => {
+  const day = DATE.test(req.query.day) ? req.query.day : today();
+  const d = new Date(day + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() - 1);
+  const prev = d.toISOString().slice(0, 10);
+  try {
+    const q = await pool.query(
+      `WITH o AS (
+         SELECT id, revenue_aud, ${PERTH('created_at')} AS ts
+         FROM orders WHERE ${LIVE} AND ${PERTH('created_at')}::date BETWEEN $1::date AND $2::date
+       ), i AS (
+         SELECT o.ts::date AS d, EXTRACT(HOUR FROM o.ts)::int AS h, o.id, MAX(o.revenue_aud) AS rev,
+           COALESCE(SUM(oi.quantity) FILTER (WHERE p.product_type='fragrance' OR p.product_type IS NULL),0) AS bottles,
+           COALESCE(SUM(oi.quantity) FILTER (WHERE p.product_type='miniature'),0) AS minis
+         FROM o
+         LEFT JOIN order_items oi ON oi.order_id = o.id
+         LEFT JOIN products p ON p.id = oi.product_id
+         GROUP BY o.ts::date, EXTRACT(HOUR FROM o.ts), o.id
+       )
+       SELECT d::text AS day, h, COUNT(*)::int AS orders,
+              ROUND(SUM(rev)::numeric,2)::float8 AS revenue,
+              SUM(bottles)::int AS bottles, SUM(minis)::int AS minis
+       FROM i GROUP BY d, h ORDER BY d, h`, [prev, day]);
+    const out = { day, prev, rows: q.rows, adspend: { available: false } };
+    const token = process.env.META_TOKEN, acct = process.env.META_AD_ACCOUNT;
+    if (token && acct) {
+      try {
+        const id = acct.startsWith('act_') ? acct : 'act_' + acct;
+        const r = await fetch(`https://graph.facebook.com/v21.0/${id}/insights?` + new URLSearchParams({
+          level: 'account', fields: 'spend',
+          breakdowns: 'hourly_stats_aggregated_by_advertiser_time_zone',
+          time_range: JSON.stringify({ since: prev, until: day }), time_increment: '1', limit: '200',
+          access_token: token,
+        }), { signal: AbortSignal.timeout(20000) });
+        const j = await r.json();
+        if (!j.error) {
+          const hours = {};
+          (j.data || []).forEach((x) => {
+            const h = parseInt(String(x.hourly_stats_aggregated_by_advertiser_time_zone || '').slice(0, 2), 10);
+            if (!x.date_start || !(h >= 0 && h < 24)) return;
+            (hours[x.date_start] = hours[x.date_start] || new Array(24).fill(0))[h] += Number(x.spend) || 0;
+          });
+          out.adspend = { available: true, hours };
+        }
+      } catch (e) { /* hourly spend is optional */ }
+    }
+    res.json(out);
+  } catch (e) { res.status(502).json({ error: 'database', message: e.message }); }
+});
+
 /* ------------------------------------------------------- ad spend by day */
 app.get('/api/adspend', requireAuth, async (req, res) => {
   const token = process.env.META_TOKEN;

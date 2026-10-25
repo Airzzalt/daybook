@@ -5,8 +5,8 @@
   var TZ = 'Australia/Perth';
   var K = { cogsBottle: 37.50, cogsMini: 9.80, fee: 0.051, gstFrom: '2026-08-18', breakeven: 132, carTarget: 35000, shutStart: '2026-09-25', shutEnd: '2026-10-08' };
   var ALLOC_DEFAULT = { switchDate: '2026-09-08', before: { car: 45, stock: 20 }, after: { car: 65, stock: 0 } };
-  var D = { loaded: false, summary: null, meta: null, stripe: null, adspend: null, settings: {}, wide: {}, err: {} };
-  var S = { preset: 'today', from: '', to: '', view: 'overview', metric: 'rev', larp: false };
+  var D = { loaded: false, hourly: null, summary: null, meta: null, stripe: null, adspend: null, settings: {}, wide: {}, err: {} };
+  var S = { preset: 'today', from: '', to: '', view: 'overview', metric: 'rev', gran: 'hour', larp: false };
   var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
   var busy = false, again = false, timer = null, seeded = false;
 
@@ -74,7 +74,7 @@
       .then(function (st) {
         D.settings = st || {};
         var W = wideFrom(), WT = S.to > today() ? S.to : today(), q = '?from=' + S.from + '&to=' + S.to;
-        return Promise.allSettled([api('/api/summary' + q), api('/api/meta' + q), api('/api/stripe'), api('/api/summary?from=' + W + '&to=' + WT), api('/api/adspend?from=' + W + '&to=' + WT)]);
+        return Promise.allSettled([api('/api/summary' + q), api('/api/meta' + q), api('/api/stripe'), api('/api/summary?from=' + W + '&to=' + WT), api('/api/adspend?from=' + W + '&to=' + WT), S.from === S.to ? api('/api/hourly?day=' + S.to) : Promise.resolve(null)]);
       })
       .then(function (r) {
         D.loaded = true;
@@ -82,6 +82,7 @@
         D.meta = r[1].status === 'fulfilled' ? r[1].value : null;
         D.stripe = r[2].status === 'fulfilled' ? r[2].value : null;
         D.adspend = r[4].status === 'fulfilled' ? r[4].value : null;
+        D.hourly = r[5] && r[5].status === 'fulfilled' ? r[5].value : null;
         D.wide = {};
         if (D.summary) D.summary.daily.forEach(function (x) { D.wide[x.day] = x; });
         if (r[3].status === 'fulfilled') r[3].value.daily.forEach(function (x) { D.wide[x.day] = x; });
@@ -135,8 +136,29 @@
   var ORDER = ['rev', 'ad', 'net', 'orders', 'bottles', 'cpa', 'roas'];
   var CUR = null;
   function fmtVal(f, v) { return f === 'm2' ? money(v, 2) : f === 'i' ? String(Math.round(v)) : f === 'x' ? v.toFixed(2) + 'x' : money(v); }
+  /* One day by the hour: running total so far against the day before. Ad-based figures need Meta's hourly spend. */
+  function hourSeries(kind, c) {
+    var H = D.hourly; if (!H || !H.rows) return null;
+    var k = KINDS[kind], ah = H.adspend && H.adspend.available ? H.adspend.hours : null;
+    if ({ ad: 1, net: 1, cpa: 1, roas: 1 }[kind] && !ah) return null;
+    var day = S.to, prevDay = shift(day, -1), last = day === today() ? Math.min(23, Math.floor(nowFrac() * 24 + 1e-6)) : 23;
+    function build(date, upto) {
+      var by = {}, out = [], cum = { orders: 0, revenue: 0, bottles: 0, minis: 0, ad: 0 };
+      H.rows.forEach(function (r) { if (r.day === date) by[r.h] = r; });
+      for (var h = 0; h <= upto; h++) {
+        var r = by[h] || {};
+        cum = { orders: cum.orders + num(r.orders), revenue: cum.revenue + num(r.revenue), bottles: cum.bottles + num(r.bottles), minis: cum.minis + num(r.minis), ad: cum.ad + (ah && ah[date] ? num(ah[date][h]) : 0) };
+        out.push({ day: date, orders: cum.orders, revenue: cum.revenue, bottles: cum.bottles, minis: cum.minis, ad: cum.ad, adKnown: true });
+      }
+      crunch(out); return out;
+    }
+    var v = build(day, last).map(k.val), pv = build(prevDay, 23).map(k.val);
+    return { v: v, pv: pv, labels: pv.map(function (_, h) { return hlabel(h); }), hourly: true, cur: v[v.length - 1], prev: pv[v.length - 1] };
+  }
   function series(kind, c) {
     var k = KINDS[kind], rows = c.t.daily, prow = c.p.daily, s = {};
+    var hs = rows.length === 1 && S.gran === 'hour' ? hourSeries(kind, c) : null;
+    if (hs) return hs;
     if (rows.length === 1) { /* one day has no shape, so show the last 14 days against the 14 before */
       var a = windowRows(shift(S.to, -13), S.to), b = windowRows(shift(S.to, -27), shift(S.to, -14));
       crunch(a); crunch(b);
@@ -233,7 +255,8 @@
     var l1 = s.trail ? 'Last 14 days' : single ? rangeShort(S.from) : md(S.from) + '–' + md(S.to);
     var l2 = s.trail ? '14 days before' : single ? rangeShort(c.pf) : md(c.pf) + '–' + md(c.pt);
     return '<div class="hl"><span class="ttl">' + k.label + '</span>' + chip(s.cur, s.prev, k.neutral) + '<span class="dim hlv">vs the period before</span></div>' +
-      chartSvg('hero', s, k.fmt, W, H) + '<div class="legend"><span>' + LEG_MAIN + l1 + '</span><span>' + LEG_PREV + l2 + '</span></div>';
+      chartSvg('hero', s, k.fmt, W, H) + '<div class="legend"><span>' + LEG_MAIN + l1 + '</span><span>' + LEG_PREV + l2 + '</span></div>' +
+      (c.t.daily.length === 1 && D.hourly ? '<div class="gran" role="group" aria-label="Graph by"><button data-gran="hour" aria-pressed="' + (S.gran === 'hour') + '">By hour</button><button data-gran="days" aria-pressed="' + (S.gran !== 'hour') + '">14 days</button></div>' : '');
   }
   function drawHero() {
     var h = $('hero'); if (!h || !CUR) return;
@@ -503,7 +526,7 @@
       '<section class="card rise" style="--i:4"><h3>Connections</h3><div class="rowlist">' + conn('Database', !!D.summary, 'Orders, products, carts and tags') +
       conn('Ad platform', !!metaOk, metaOk ? 'Spend, reach and the funnel above the cart' : 'Set META_TOKEN and META_AD_ACCOUNT in the service environment') +
       conn('Payments', !!stripeOk, stripeOk ? 'Money landing in the bank' : 'Set STRIPE_KEY in the service environment') + '</div></section>' +
-      '<section class="card rise" style="--i:5"><h3>Session</h3><div class="foot" style="margin:0 0 10px">Signing in lasts 180 days and renews every time you open the dashboard.</div><button class="btn" id="signout2">Sign out</button></section>';
+      '<section class="card rise" style="--i:5"><h3>Session</h3><div class="foot" style="margin:0 0 10px">Signing in lasts 180 days and renews every time you open the dashboard.</div><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn" id="refreshnow">Refresh now</button><button class="btn" id="signout2">Sign out</button></div></section>';
   }
 
   /* ---------- render + wiring ---------- */
@@ -552,6 +575,8 @@
   }
   function bindPage() {
     placeTabs();
+    var hero = $('hero');
+    if (hero) hero.addEventListener('click', function (e) { var g = e.target.closest('[data-gran]'); if (!g) return; tap(); S.gran = g.dataset.gran; drawHero(); });
     Array.prototype.forEach.call(V.querySelectorAll('#mtabs button'), function (b) {
       b.addEventListener('click', function () {
         tap(); S.metric = b.dataset.m;
@@ -593,6 +618,7 @@
         .then(function () { $('pw-cur').value = $('pw-new').value = $('pw-two').value = ''; m.textContent = 'Password changed.'; setTimeout(function () { m.textContent = ''; }, 3000); })
         .catch(function (e) { m.textContent = (e && e.error) || 'Could not change it.'; });
     });
+    var rn = $('refreshnow'); if (rn) rn.addEventListener('click', function () { tap(); load(); });
     var so = $('signout2'); if (so) so.addEventListener('click', function () { tap(); fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }).then(showGate); });
   }
 
@@ -655,7 +681,6 @@
     S.preset = 'custom'; marks(); arm(); load();
   }
   $('from').addEventListener('change', custom); $('to').addEventListener('change', custom);
-  $('refresh').addEventListener('click', function () { tap(); load(); });
   $('dock').addEventListener('click', function (e) { var b = e.target.closest('button'); if (!b) return; tap(); S.view = b.dataset.v; render(); window.scrollTo({ top: 0 }); });
   document.addEventListener('pointermove', function (e) { var g = e.target.closest && e.target.closest('.glass'); if (!g) return; var r = g.getBoundingClientRect(); g.style.setProperty('--mx', (e.clientX - r.left) + 'px'); g.style.setProperty('--my', (e.clientY - r.top) + 'px'); });
   var rsT = null, lastW = window.innerWidth;
@@ -669,6 +694,34 @@
   document.addEventListener('visibilitychange', function () {
     if (document.visibilityState === 'visible' && S.preset === 'today' && !$('app').hidden) { if (S.to !== today()) setRange('today'); load(); }
   });
+
+  /* ----- pull down at the top of the page to refresh ----- */
+  (function () {
+    var ptr = $('ptr'), y0 = null, x0 = 0, pull = 0, TH = 64, active = false, ico = ptr.querySelector('svg');
+    function atTop() { return (window.pageYOffset || document.documentElement.scrollTop || 0) <= 0 && document.body.style.overflow !== 'hidden' && !$('app').hidden; }
+    function set(p) { pull = p; ptr.style.transform = 'translate(-50%,' + (p - 46) + 'px)'; ptr.style.opacity = Math.min(1, p / 40); ptr.classList.toggle('ready', p >= TH); ico.style.transform = 'rotate(' + (p * 4) + 'deg)'; }
+    document.addEventListener('touchstart', function (e) { active = false; if (e.touches.length !== 1 || !atTop()) { y0 = null; return; } y0 = e.touches[0].clientY; x0 = e.touches[0].clientX; }, { passive: true });
+    document.addEventListener('touchmove', function (e) {
+      if (y0 == null) return;
+      var dy = e.touches[0].clientY - y0, dx = e.touches[0].clientX - x0;
+      if (!active) {
+        if (dy > 10 && dy > Math.abs(dx) * 1.5 && atTop()) active = true;
+        else { if (dy < -6 || Math.abs(dx) > 14) y0 = null; return; }
+      }
+      ptr.classList.remove('settle'); set(Math.min(90, dy * 0.5));
+    }, { passive: true });
+    function end() {
+      if (y0 == null) return;
+      var go = active && pull >= TH; y0 = null; active = false; ptr.classList.add('settle');
+      if (!go) { set(0); return; }
+      tap(); ptr.classList.add('busy'); set(TH); load();
+      var t0 = Date.now(), iv = setInterval(function () {
+        if (busy && Date.now() - t0 < 30000) return;
+        clearInterval(iv); setTimeout(function () { ptr.classList.remove('busy'); set(0); }, Math.max(0, 700 - (Date.now() - t0)));
+      }, 120);
+    }
+    document.addEventListener('touchend', end, { passive: true }); document.addEventListener('touchcancel', end, { passive: true });
+  })();
 
   function boot() {
     var on = false; try { on = localStorage.getItem('daybook-larp') === '1'; } catch (er) {}
