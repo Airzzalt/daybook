@@ -657,7 +657,6 @@
   $('from').addEventListener('change', custom); $('to').addEventListener('change', custom);
   $('refresh').addEventListener('click', function () { tap(); load(); });
   $('dock').addEventListener('click', function (e) { var b = e.target.closest('button'); if (!b) return; tap(); S.view = b.dataset.v; render(); window.scrollTo({ top: 0 }); });
-  $('larpsw').addEventListener('click', function () { tap(); setLarp(!S.larp); });
   document.addEventListener('pointermove', function (e) { var g = e.target.closest && e.target.closest('.glass'); if (!g) return; var r = g.getBoundingClientRect(); g.style.setProperty('--mx', (e.clientX - r.left) + 'px'); g.style.setProperty('--my', (e.clientY - r.top) + 'px'); });
   var rsT = null, lastW = window.innerWidth;
   window.addEventListener('resize', function () {
@@ -673,7 +672,7 @@
 
   function boot() {
     var on = false; try { on = localStorage.getItem('daybook-larp') === '1'; } catch (er) {}
-    S.larp = on; document.body.classList.toggle('larp', on); $('larpsw').setAttribute('aria-checked', on);
+    S.larp = on; document.body.classList.toggle('larp', on);
     setRange(S.preset); render(); load();
     requestAnimationFrame(function () { marks(); place($('dock'), '.lens', $('dock').querySelector('[aria-current=page]')); });
   }
