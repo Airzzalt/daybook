@@ -331,6 +331,9 @@ app.put('/api/settings', requireAuth, async (req, res) => {
   for (const k of ['carBalance', 'manualAdSpend', 'stockUnits']) {
     if (body[k] != null && Number.isFinite(Number(body[k]))) clean[k] = Number(body[k]);
   }
+  // The day carBalance was last set. The dashboard adds each payout's personal-fund
+  // share on top of it from that day on, so the fund grows by itself.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(body.carBalanceAsOf || '')) clean.carBalanceAsOf = body.carBalanceAsOf;
   // Per-day actual supplier invoices and manual adjustments, keyed by trading date.
   for (const k of ['supplierActual', 'adjust']) {
     if (body[k] && typeof body[k] === 'object' && !Array.isArray(body[k])) {
@@ -338,7 +341,7 @@ app.put('/api/settings', requireAuth, async (req, res) => {
       for (const [d, v] of Object.entries(body[k]).slice(0, 400)) {
         if (/^\d{4}-\d{2}-\d{2}$/.test(d) && Number.isFinite(Number(v))) map[d] = Number(v);
       }
-      if (Object.keys(map).length) clean[k] = map;
+      clean[k] = map; // an empty map is allowed, so clearing the last entry sticks
     }
   }
   // Allocation splits: a switch date plus car/stock percentages either side of it.
