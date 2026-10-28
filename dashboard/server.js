@@ -215,6 +215,14 @@ app.get('/api/summary', requireAuth, async (req, res) => {
   }
 });
 
+/* ------------------------------------------------- first order (for "All time") */
+app.get('/api/first', requireAuth, async (_req, res) => {
+  try {
+    const r = await pool.query(`SELECT MIN(${PERTH('created_at')}::date)::text AS first FROM orders WHERE ${LIVE}`);
+    res.json({ first: (r.rows[0] && r.rows[0].first) || null });
+  } catch (e) { res.status(502).json({ error: 'database', message: e.message }); }
+});
+
 /* ------------------------------------------------------------------ meta */
 const ACT = {
   purchase: ['omni_purchase', 'purchase', 'offsite_conversion.fb_pixel_purchase'],
@@ -336,15 +344,19 @@ app.get('/api/adspend', requireAuth, async (req, res) => {
     fields: 'spend',
     time_range: JSON.stringify({ since: from, until: to }),
     time_increment: '1',
-    limit: '200',
+    limit: '500',
     access_token: token,
   });
   try {
-    const r = await fetch(url, { signal: AbortSignal.timeout(25000) });
-    const j = await r.json();
-    if (j.error) return res.json({ available: false, reason: 'api_error', message: j.error.message });
     const days = {};
-    (j.data || []).forEach((d) => { if (d.date_start) days[d.date_start] = Number(d.spend) || 0; });
+    let next = url;
+    for (let page = 0; next && page < 12; page++) { // follow Meta's paging so long ranges are not cut short
+      const r = await fetch(next, { signal: AbortSignal.timeout(25000) });
+      const j = await r.json();
+      if (j.error) return res.json({ available: false, reason: 'api_error', message: j.error.message });
+      (j.data || []).forEach((d) => { if (d.date_start) days[d.date_start] = Number(d.spend) || 0; });
+      next = j.paging && j.paging.next ? j.paging.next : null;
+    }
     res.json({ available: true, days });
   } catch (e) {
     res.json({ available: false, reason: 'unreachable', message: e.message });

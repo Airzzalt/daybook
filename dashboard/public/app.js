@@ -5,7 +5,7 @@
   var TZ = 'Australia/Perth';
   var K = { cogsBottle: 37.50, cogsMini: 9.80, fee: 0.051, gstFrom: '2026-08-18', breakeven: 132, carTarget: 35000, shutStart: '2026-09-25', shutEnd: '2026-10-08' };
   var ALLOC_DEFAULT = { switchDate: '2026-09-08', before: { car: 45, stock: 20 }, after: { car: 65, stock: 0 } };
-  var D = { loaded: false, hourly: null, summary: null, meta: null, stripe: null, adspend: null, settings: {}, wide: {}, err: {} };
+  var D = { loaded: false, first: null, hourly: null, summary: null, meta: null, stripe: null, adspend: null, settings: {}, wide: {}, err: {} };
   var S = { preset: 'today', from: '', to: '', view: 'overview', metric: 'rev', gran: 'hour', larp: false };
   var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
   var busy = false, again = false, timer = null, seeded = false;
@@ -51,7 +51,7 @@
   /* One row for every calendar day, zero-filled, because the database only returns days that had orders. */
   function windowRows(f, t) {
     var out = [], d = f, guard = 0;
-    while (d <= t && guard++ < 800) {
+    while (d <= t && guard++ < 4000) {
       var w = D.wide[d] || {}, sp = daySpend(d);
       out.push({ day: d, orders: num(w.orders), revenue: num(w.revenue), bottles: num(w.bottles), minis: num(w.minis), ad: sp == null ? 0 : sp, adKnown: sp != null });
       d = shift(d, 1);
@@ -63,14 +63,15 @@
     if (t28 < f) f = t28;
     var asOf = D.settings && D.settings.carBalanceAsOf;
     if (asOf && shift(asOf, -6) < f) f = shift(asOf, -6);
-    var lim = shift(today(), -400); if (f < lim) f = lim;
+    var lim = shift(today(), -400); if (S.preset !== 'all' && f < lim) f = lim;
     return f;
   }
   function load() {
     if (busy) { again = true; return; }
     busy = true; var rb = $('refresh'); if (rb) rb.classList.add('spin');
     function finish() { busy = false; if (rb) rb.classList.remove('spin'); if (again) { again = false; load(); } }
-    api('/api/settings').catch(function (e) { if (e && e.code === 'auth') throw e; return {}; })
+    var pre = S.preset === 'all' && !D.first ? api('/api/first').then(function (f) { D.first = f && f.first; setRange('all'); }).catch(function () {}) : Promise.resolve();
+    pre.then(function () { return api('/api/settings'); }).catch(function (e) { if (e && e.code === 'auth') throw e; return {}; })
       .then(function (st) {
         D.settings = st || {};
         var W = wideFrom(), WT = S.to > today() ? S.to : today(), q = '?from=' + S.from + '&to=' + S.to;
@@ -155,6 +156,16 @@
     var v = build(day, last).map(k.val), pv = build(prevDay, 23).map(k.val);
     return { v: v, pv: pv, labels: pv.map(function (_, h) { return hlabel(h); }), hourly: true, cur: v[v.length - 1], prev: pv[v.length - 1] };
   }
+  function bucketRows(rows, size) {
+    var out = [];
+    var off = rows.length % size; /* full groups counted back from today, so the newest point is never a part-week; the few oldest leftover days are left off the line only */
+    for (var i = off; i < rows.length; i += size) {
+      var ch = rows.slice(i, i + size), g = { day: ch[0].day, orders: 0, revenue: 0, bottles: 0, minis: 0, ad: 0, _net: 0 };
+      ch.forEach(function (r) { g.orders += r.orders; g.revenue += r.revenue; g.bottles += r.bottles; g.minis += r.minis; g.ad += r.ad; g._net += r._net || 0; });
+      out.push(g);
+    }
+    return out;
+  }
   function series(kind, c) {
     var k = KINDS[kind], rows = c.t.daily, prow = c.p.daily, s = {};
     var hs = rows.length === 1 && S.gran === 'hour' ? hourSeries(kind, c) : null;
@@ -164,8 +175,16 @@
       crunch(a); crunch(b);
       s.v = a.map(k.val); s.pv = b.map(k.val); s.labels = a.map(function (r) { return md(r.day); }); s.trail = true;
     } else {
-      s.v = rows.map(k.val); s.pv = prow.map(k.val); s.labels = rows.map(function (r) { return md(r.day); });
+      var size = rows.length > 400 ? 30 : rows.length > 90 ? 7 : 1;
+      if (size > 1) { /* long ranges: one point per week (or per month) so the line stays readable */
+        var rb = bucketRows(rows, size), pb = bucketRows(prow, size), MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        s.v = rb.map(k.val); s.pv = pb.map(k.val);
+        s.labels = rb.map(function (r) { return size === 30 ? MON[Number(r.day.slice(5, 7)) - 1] + ' ' + r.day.slice(2, 4) : md(r.day); });
+      } else {
+        s.v = rows.map(k.val); s.pv = prow.map(k.val); s.labels = rows.map(function (r) { return md(r.day); });
+      }
     }
+    if (!s.pv.some(function (x) { return x; })) s.pv = [];
     s.cur = k.rate ? k.tot(c.t) : sum(rows.map(k.val)); s.prev = k.rate ? k.tot(c.p) : sum(prow.map(k.val));
     return s;
   }
@@ -252,10 +271,10 @@
     var c = CUR, k = KINDS[kind], s = series(kind, c);
     var W = Math.max(300, Math.min(1040, V.clientWidth || (window.innerWidth - 20))), H = W < 500 ? 250 : Math.max(280, Math.min(340, Math.round(W * .3)));
     var single = c.t.daily.length === 1 && !s.trail;
-    var l1 = s.trail ? 'Last 14 days' : single ? rangeShort(S.from) : md(S.from) + '–' + md(S.to);
+    var l1 = s.trail ? 'Last 14 days' : single ? rangeShort(S.from) : S.preset === 'all' ? 'All time' : md(S.from) + '–' + md(S.to);
     var l2 = s.trail ? '14 days before' : single ? rangeShort(c.pf) : md(c.pf) + '–' + md(c.pt);
     return '<div class="hl"><span class="ttl">' + k.label + '</span>' + chip(s.cur, s.prev, k.neutral) + '<span class="dim hlv">vs the period before</span></div>' +
-      chartSvg('hero', s, k.fmt, W, H) + '<div class="legend"><span>' + LEG_MAIN + l1 + '</span><span>' + LEG_PREV + l2 + '</span></div>' +
+      chartSvg('hero', s, k.fmt, W, H) + '<div class="legend"><span>' + LEG_MAIN + l1 + '</span>' + (s.pv.length ? '<span>' + LEG_PREV + l2 + '</span>' : '') + '</div>' +
       (c.t.daily.length === 1 && D.hourly ? '<div class="gran" role="group" aria-label="Graph by"><button data-gran="hour" aria-pressed="' + (S.gran === 'hour') + '">By hour</button><button data-gran="days" aria-pressed="' + (S.gran !== 'hour') + '">14 days</button></div>' : '');
   }
   function drawHero() {
@@ -283,7 +302,7 @@
   var ICON_CAL = '<svg viewBox="0 0 20 20" fill="none"><rect x="3" y="4.5" width="14" height="12" rx="3" stroke="currentColor" stroke-width="1.6"/><path d="M3 8.5h14M7 3v3M13 3v3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
   var ICON_REPORT = '<svg viewBox="0 0 20 20" fill="none"><rect x="3" y="3" width="14" height="14" rx="3" stroke="currentColor" stroke-width="1.6"/><path d="M7 13v-3M10 13V7M13 13v-2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
   var CHEV = '<svg class="chev" viewBox="0 0 16 16" fill="none"><path d="m6 3 5 5-5 5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-  function rangeText() { return { today: 'Today', yday: 'Yesterday', '7': '7 days', '14': '14 days', '30': '30 days', mtd: 'This month', lastmo: 'Last month' }[S.preset] || (md(S.from) + ' – ' + md(S.to)); }
+  function rangeText() { return { today: 'Today', yday: 'Yesterday', '7': '7 days', '14': '14 days', '30': '30 days', mtd: 'This month', lastmo: 'Last month', all: 'All time' }[S.preset] || (md(S.from) + ' – ' + md(S.to)); }
   function rangePill() { return '<button class="pillbtn" data-act="range">' + ICON_CAL + '<span>' + esc(rangeText()) + '</span></button>'; }
   function greet() { var h = Math.floor(nowFrac() * 24); return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'; }
   function head(title, extra) { return '<div class="phead rise"><h1>' + esc(title) + '</h1><span class="meta">' + esc(rangeLabel()) + '</span>' + (title === 'Settings' ? '' : rangePill()) + (extra || '') + '</div>'; }
@@ -558,6 +577,7 @@
     if (p === 'today') S.from = S.to = t; else if (p === 'yday') S.from = S.to = shift(t, -1);
     else if (p === '7' || p === '14' || p === '30') { S.to = t; S.from = shift(t, -(parseInt(p, 10) - 1)); }
     else if (p === 'mtd') { S.to = t; S.from = t.slice(0, 8) + '01'; }
+    else if (p === 'all') { S.to = t; S.from = D.first && D.first <= t ? D.first : shift(t, -365); }
     else if (p === 'lastmo') { var f = t.slice(0, 8) + '01'; S.to = shift(f, -1); S.from = S.to.slice(0, 8) + '01'; }
     $('from').value = S.from; $('to').value = S.to; marks(); arm();
   }
@@ -726,6 +746,7 @@
   function boot() {
     var on = false; try { on = localStorage.getItem('daybook-larp') === '1'; } catch (er) {}
     S.larp = on; document.body.classList.toggle('larp', on);
+    api('/api/first').then(function (f) { D.first = f && f.first; }).catch(function () {});
     setRange(S.preset); render(); load();
     requestAnimationFrame(function () { marks(); place($('dock'), '.lens', $('dock').querySelector('[aria-current=page]')); });
   }
