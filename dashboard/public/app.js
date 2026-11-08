@@ -455,8 +455,11 @@
       '<div class="chips">' + quick + (ar.custom ? '<button type="button" class="chipbtn" id="a-reset">Match overview</button>' : '') + '</div></section>';
     var T = { rev: 0, fees: 0, sup: 0, gst: 0, ads: 0, net: 0, ord: 0, car: 0, st: 0, op: 0 };
     groups.forEach(function (g) { var x = allocData(g); T.rev += g.revenue; T.fees += x.fees; T.sup += x.sup; T.gst += x.gst; T.ads += g.ads; T.net += x.net; T.ord += g.orders; T.car += x.car; T.st += x.st; T.op += x.op; });
+    var sk = ar.from + '|' + ar.to, custom = S.aSup != null && S.aSupKey === sk, auto = T.sup;
+    if (custom) { T.net += T.sup - S.aSup; T.sup = S.aSup; }
+    var supRow = '<div class="ln out"><div class="lt"><b>Supplier (COGS)</b><em>' + (custom ? 'your amount · auto was ' + money(auto, 2) : 'estimate or actual invoice · type to change') + '</em></div><div class="lv"><input type="number" step="0.01" id="a-sup" value="' + (custom ? S.aSup : '') + '" placeholder="' + auto.toFixed(2) + '" aria-label="Custom supplier amount"></div></div>' + (custom ? '<div style="padding:4px 0 8px"><button type="button" class="chipbtn" id="a-sup-reset">Back to automatic</button></div>' : '');
     h += '<section class="card rise" style="--i:1;margin-bottom:14px"><div style="display:grid;grid-template-columns:1fr 1fr;gap:14px"><div><div class="meta">Revenue</div><div style="font-size:26px;font-weight:650;letter-spacing:-.02em">' + money(T.rev, 2) + '</div></div><div><div class="meta">Profit</div><div style="font-size:26px;font-weight:650;letter-spacing:-.02em;color:' + (T.net < 0 ? 'var(--bad,#f0616d)' : 'var(--good,#4ade80)') + '">' + money(T.net, 2) + '</div></div></div>' +
-      '<div style="margin-top:12px">' + ln('Orders', md(ar.from) + (ar.from === ar.to ? '' : ' – ' + md(ar.to)), String(T.ord), '') + ln('Processing fees', '', '−' + money(T.fees, 2), 'out') + ln('Supplier (COGS)', 'estimate or actual invoice', '−' + money(T.sup, 2), 'out') + ln('GST', 'to the GST account', '−' + money(T.gst, 2), 'out') + ln('Ad spend', '', '−' + money(T.ads, 2), 'out') +
+      '<div style="margin-top:12px">' + ln('Orders', md(ar.from) + (ar.from === ar.to ? '' : ' – ' + md(ar.to)), String(T.ord), '') + ln('Processing fees', '', '−' + money(T.fees, 2), 'out') + supRow + ln('GST', 'to the GST account', '−' + money(T.gst, 2), 'out') + ln('Ad spend', '', '−' + money(T.ads, 2), 'out') +
       ln('Profit', 'revenue − everything above', money(T.net, 2), 'net') + '</div></section>';
     h += '<div class="note ok rise" style="--i:1;margin:0 0 14px"><div><b>Split now: ' + splitText(a.after) + '.</b>This applies to every trading day from ' + md(a.switchDate) + '. Before that: ' + splitText(a.before) + '. Supplier cost is estimated from the bottle count until you type in what she actually invoiced. Refunds and anything unusual are not in here — they come out of Operating.</div></div>';
     if (!groups.length) h += '<div class="card"><div class="empty">No trade in this range.</div></div>';
@@ -637,6 +640,8 @@
         else setAllocRange(shift(t, -(parseInt(p, 10) - 1)), t);
       });
     });
+    var asup = $('a-sup'); if (asup) asup.addEventListener('change', function () { var v = asup.value.trim(); var r = allocRange(); if (v === '' || isNaN(parseFloat(v))) { S.aSup = null; } else { S.aSup = parseFloat(v); S.aSupKey = r.from + '|' + r.to; } render(false); });
+    var asr = $('a-sup-reset'); if (asr) asr.addEventListener('click', function () { tap(); S.aSup = null; render(false); });
     var ar2 = $('a-reset'); if (ar2) ar2.addEventListener('click', function () { tap(); S.aFrom = S.aTo = null; render(false); });
     var eb = $('alloc-edit'); if (eb) eb.addEventListener('click', function () { tap(); openModal(); });
     Array.prototype.forEach.call(V.querySelectorAll('input[data-sup]'), function (inp) {
