@@ -425,6 +425,12 @@ html,body{overscroll-behavior-y:contain}
 .gran button{padding:6px 15px;border-radius:11px;font-size:13px;font-weight:600;color:var(--tx2);transition:background-color .18s ease,color .18s ease,transform .16s var(--out)}
 .gran button:active{transform:scale(.96)}
 .gran button[aria-pressed=true]{background:rgba(255,255,255,.14);color:var(--tx)}
+.arange .amrow{gap:10px;flex-wrap:nowrap}.arange label{text-align:left;align-items:stretch;flex:1;display:flex;flex-direction:column;gap:5px;color:var(--tx3);font-size:12px;min-width:0}
+.arange input[type=date]{width:100%;min-width:0;font-size:14px;padding:9px 8px;text-align:left}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.chipbtn{padding:7px 13px;border-radius:99px;background:rgba(255,255,255,.07);border:1px solid var(--line);font-size:13px;font-weight:600;transition:transform .16s var(--out),background-color .15s ease}
+.chipbtn:active{transform:scale(.96)}
+@media (hover:hover) and (pointer:fine){.chipbtn:hover{background:rgba(255,255,255,.12)}}
 </style>
 </head>
 <body>

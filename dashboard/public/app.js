@@ -3,10 +3,10 @@
 
   /* The same figures the live dashboard has always used. */
   var TZ = 'Australia/Perth';
-  var K = { cogsBottle: 37.50, cogsMini: 9.80, fee: 0.051, gstFrom: '2026-08-18', breakeven: 132, carTarget: 35000, shutStart: '2026-09-25', shutEnd: '2026-10-08' };
+  var K = { cogsBottle: 31.37, cogsMini: 6.95, oldBottle: 37.50, oldMini: 9.80, cogsFrom: '2026-09-07', fee: 0.051, gstFrom: '2026-08-18', breakeven: 132, carTarget: 35000, shutStart: '2026-09-25', shutEnd: '2026-10-08' };
   var ALLOC_DEFAULT = { switchDate: '2026-09-08', before: { car: 45, stock: 20 }, after: { car: 65, stock: 0 } };
   var D = { loaded: false, first: null, hourly: null, summary: null, meta: null, stripe: null, adspend: null, settings: {}, wide: {}, err: {} };
-  var S = { preset: 'today', from: '', to: '', view: 'overview', metric: 'rev', gran: 'hour', larp: false };
+  var S = { aFrom: null, aTo: null, preset: 'today', from: '', to: '', view: 'overview', metric: 'rev', gran: 'hour', larp: false };
   var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
   var busy = false, again = false, timer = null, seeded = false;
 
@@ -64,21 +64,23 @@
     var asOf = D.settings && D.settings.carBalanceAsOf;
     if (asOf && shift(asOf, -6) < f) f = shift(asOf, -6);
     var lim = shift(today(), -400); if (S.preset !== 'all' && f < lim) f = lim;
+    if (S.aFrom && S.aFrom < f) f = S.aFrom;
     return f;
   }
   function load() {
     if (busy) { again = true; return; }
-    busy = true; var rb = $('refresh'); if (rb) rb.classList.add('spin');
+    var wf, wt; busy = true; var rb = $('refresh'); if (rb) rb.classList.add('spin');
     function finish() { busy = false; if (rb) rb.classList.remove('spin'); if (again) { again = false; load(); } }
     var pre = S.preset === 'all' && !D.first ? api('/api/first').then(function (f) { D.first = f && f.first; setRange('all'); }).catch(function () {}) : Promise.resolve();
     pre.then(function () { return api('/api/settings'); }).catch(function (e) { if (e && e.code === 'auth') throw e; return {}; })
       .then(function (st) {
         D.settings = st || {};
-        var W = wideFrom(), WT = S.to > today() ? S.to : today(), q = '?from=' + S.from + '&to=' + S.to;
+        wf = wideFrom(); wt = S.to > today() ? S.to : today(); if (S.aTo && S.aTo > wt) wt = S.aTo;
+        var W = wf, WT = wt, q = '?from=' + S.from + '&to=' + S.to;
         return Promise.allSettled([api('/api/summary' + q), api('/api/meta' + q), api('/api/stripe'), api('/api/summary?from=' + W + '&to=' + WT), api('/api/adspend?from=' + W + '&to=' + WT), S.from === S.to ? api('/api/hourly?day=' + S.to) : Promise.resolve(null)]);
       })
       .then(function (r) {
-        D.loaded = true;
+        D.loaded = true; D.wf = wf; D.wt = wt;
         D.summary = r[0].status === 'fulfilled' ? r[0].value : null; D.err.summary = r[0].reason;
         D.meta = r[1].status === 'fulfilled' ? r[1].value : null;
         D.stripe = r[2].status === 'fulfilled' ? r[2].value : null;
@@ -101,11 +103,13 @@
   }
 
   /* ---------- the maths (same as the live dashboard) ---------- */
+  /* Avinie costs (US$22.59/bottle incl. shipping x 1.389) apply from cogsFrom; older days keep the old supplier price */
+  function cogsEst(day, b, m) { return day >= K.cogsFrom ? b * K.cogsBottle + m * K.cogsMini : b * K.oldBottle + m * K.oldMini; }
   function allocFor(day) { var a = allocCfg(), s = day >= a.switchDate ? a.after : a.before; return { car: num(s.car) / 100, stock: num(s.stock) / 100 }; }
   function crunch(rows) {
     var t = { orders: 0, revenue: 0, bottles: 0, minis: 0, gst: 0, cogs: 0, fees: 0, ad: 0, adKnown: true, days: rows.length };
     rows.forEach(function (r) {
-      var gst = r.day >= K.gstFrom ? r.revenue / 11 : 0, cogs = r.bottles * K.cogsBottle + r.minis * K.cogsMini, fees = r.revenue * K.fee;
+      var gst = r.day >= K.gstFrom ? r.revenue / 11 : 0, cogs = cogsEst(r.day, r.bottles, r.minis), fees = r.revenue * K.fee;
       t.orders += r.orders; t.revenue += r.revenue; t.bottles += r.bottles; t.minis += r.minis; t.gst += gst; t.cogs += cogs; t.fees += fees; t.ad += r.ad; if (r.adKnown === false) t.adKnown = false;
             r._c = r.revenue - gst - cogs - fees; r._gst = gst; r._cogs = cogs; r._net = r._c - r.ad;
       var a = allocFor(r.day); r._car = a.car; r._st = a.stock;
@@ -423,23 +427,32 @@
     var g = {};
     daily.forEach(function (r) {
       var p = payoutDay(r.day); if (!g[p]) g[p] = { pay: p, days: [], revenue: 0, bottles: 0, minis: 0, ads: 0, adsKnown: true, orders: 0 };
-      var b = g[p]; b.days.push(r.day); b.revenue += r.revenue; b.bottles += r.bottles; b.minis += r.minis; b.orders += r.orders; b.ads += r.ad;
+      var b = g[p]; b.days.push(r.day); b.revenue += r.revenue; b.bottles += r.bottles; b.minis += r.minis; b.orders += r.orders; b.ads += r.ad; b.est = (b.est || 0) + cogsEst(r.day, r.bottles, r.minis);
       if (r.adKnown === false) b.adsKnown = false;
     });
     return Object.keys(g).sort().reverse().map(function (k) { return g[k]; });
   }
   function ln(label, sub, val, cls) { return '<div class="ln ' + cls + '"><div class="lt"><b>' + label + '</b><em>' + esc(sub) + '</em></div><div class="lv">' + val + '</div></div>'; }
   function allocData(g, cfgDate, cfg) {
-    var fees = g.revenue * K.fee, lands = g.revenue - fees, est = g.bottles * K.cogsBottle + g.minis * K.cogsMini;
+    var fees = g.revenue * K.fee, lands = g.revenue - fees, est = g.est != null ? g.est : cogsEst(g.days[0], g.bottles, g.minis);
     var act = supplierMap()[g.pay], isAct = act != null, sup = isAct ? num(act) : est;
     var gst = g.days.some(function (d) { return d >= K.gstFrom; }) ? lands / 11 : 0, net = g.revenue - sup - fees - g.ads - gst;
     var a = cfg ? (g.days[0] >= cfgDate ? { car: num(cfg.after.car) / 100, stock: num(cfg.after.stock) / 100 } : { car: num(cfg.before.car) / 100, stock: num(cfg.before.stock) / 100 }) : allocFor(g.days[0]);
     return { fees: fees, lands: lands, est: est, sup: sup, isAct: isAct, gst: gst, net: net, a: a, car: net * a.car, st: net * a.stock, op: net - net * a.car - net * a.stock };
   }
   function splitText(s) { return 'Personal ' + s.car + ' / Stock ' + s.stock + ' / Operating ' + (100 - s.car - s.stock); }
+  function allocRange() { return { from: S.aFrom || S.from, to: S.aTo || S.to, custom: !!(S.aFrom && S.aTo) }; }
+  function setAllocRange(from, to) {
+    if (from > to) { var x = from; from = to; to = x; }
+    S.aFrom = from; S.aTo = to;
+    if (D.wf && D.wt && D.wf <= from && D.wt >= to) { render(false); } else { load(); }
+  }
   function vAlloc() {
-    var c = ctx(), groups = groupPayouts(c.t.daily), a = allocCfg();
-    var h = head('Allocations', '<button type="button" class="btn" id="alloc-edit">Edit splits</button>');
+    var ar = allocRange(), groups = groupPayouts(windowRows(ar.from, ar.to)).filter(function (g) { return g.revenue > 0 || g.ads > 0; }), a = allocCfg(), t = today();
+    var quick = [['7', 'Last 7 days'], ['30', 'Last 30 days'], ['mtd', 'This month'], ['all', 'All time']].map(function (q) { return '<button type="button" class="chipbtn" data-ap="' + q[0] + '">' + q[1] + '</button>'; }).join('');
+    var h = '<div class="phead rise"><h1>Allocations</h1><span class="meta">' + md(ar.from) + (ar.from === ar.to ? '' : ' – ' + md(ar.to)) + '</span><button type="button" class="btn" id="alloc-edit">Edit splits</button></div>' +
+      '<section class="card rise arange" style="--i:1;margin-bottom:14px"><div class="amrow"><label>From <input type="date" id="a-from" value="' + ar.from + '"></label><label>To <input type="date" id="a-to" value="' + ar.to + '"></label></div>' +
+      '<div class="chips">' + quick + (ar.custom ? '<button type="button" class="chipbtn" id="a-reset">Match overview</button>' : '') + '</div></section>';
     h += '<div class="note ok rise" style="--i:1;margin:0 0 14px"><div><b>Split now: ' + splitText(a.after) + '.</b>This applies to every trading day from ' + md(a.switchDate) + '. Before that: ' + splitText(a.before) + '. Supplier cost is estimated from the bottle count until you type in what she actually invoiced. Refunds and anything unusual are not in here — they come out of Operating.</div></div>';
     if (!groups.length) h += '<div class="card"><div class="empty">No trade in this range.</div></div>';
     groups.forEach(function (g, i) {
@@ -608,6 +621,18 @@
     var rp = V.querySelector('[data-act=report]');
     if (rp) rp.addEventListener('click', function () { tap(); var r = $('report'); if (r) r.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' }); });
     Array.prototype.forEach.call(V.querySelectorAll('[data-go]'), function (b) { b.addEventListener('click', function () { tap(); S.view = b.dataset.go; render(); window.scrollTo({ top: 0 }); }); });
+    var af = $('a-from'), at = $('a-to');
+    function aGo() { var re = /^\d{4}-\d{2}-\d{2}$/; if (re.test(af.value) && re.test(at.value)) { tap(); setAllocRange(af.value, at.value); } }
+    if (af) { af.addEventListener('change', aGo); at.addEventListener('change', aGo); }
+    Array.prototype.forEach.call(V.querySelectorAll('[data-ap]'), function (b) {
+      b.addEventListener('click', function () {
+        tap(); var p = b.dataset.ap, t = today();
+        if (p === 'all') setAllocRange(D.first && D.first <= t ? D.first : shift(t, -365), t);
+        else if (p === 'mtd') setAllocRange(t.slice(0, 8) + '01', t);
+        else setAllocRange(shift(t, -(parseInt(p, 10) - 1)), t);
+      });
+    });
+    var ar2 = $('a-reset'); if (ar2) ar2.addEventListener('click', function () { tap(); S.aFrom = S.aTo = null; render(false); });
     var eb = $('alloc-edit'); if (eb) eb.addEventListener('click', function () { tap(); openModal(); });
     Array.prototype.forEach.call(V.querySelectorAll('input[data-sup]'), function (inp) {
       inp.addEventListener('change', function () {
