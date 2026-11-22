@@ -486,7 +486,7 @@
     var ar = allocRange(), groups = groupPayouts(windowRows(ar.from, ar.to)).filter(function (g) { return g.revenue > 0 || g.ads > 0; }), a = allocCfg(), t = today();
     var quick = [['7', 'Last 7 days'], ['30', 'Last 30 days'], ['mtd', 'This month'], ['all', 'All time']].map(function (q) { return '<button type="button" class="chipbtn" data-ap="' + q[0] + '">' + q[1] + '</button>'; }).join('');
     var h = '<div class="phead rise"><h1>Allocations</h1><span class="meta">' + md(ar.from) + (ar.from === ar.to ? '' : ' – ' + md(ar.to)) + '</span><button type="button" class="btn" id="alloc-edit">Edit splits</button></div>' +
-      '<section class="card rise arange" style="--i:1;margin-bottom:14px"><div class="amrow"><label>From <input type="date" readonly id="a-from" value="' + ar.from + '"></label><label>To <input type="date" readonly id="a-to" value="' + ar.to + '"></label></div>' +
+      '<section class="card rise arange" style="--i:1;margin-bottom:14px"><div class="amrow"><label>From <input type="text" class="dateinp" inputmode="none" readonly id="a-from" value="' + ar.from + '"></label><label>To <input type="text" class="dateinp" inputmode="none" readonly id="a-to" value="' + ar.to + '"></label></div>' +
       '<label class="payick">Or pick a payout <select id="a-pay" aria-label="Choose a payout">' + payOpts(ar) + '</select></label>' +
       '<div class="chips">' + quick + (ar.custom ? '<button type="button" class="chipbtn" id="a-reset">Match overview</button>' : '') + '</div></section>';
     var T = { rev: 0, fees: 0, sup: 0, gst: 0, ads: 0, net: 0, ord: 0, car: 0, st: 0, op: 0 };
@@ -752,12 +752,12 @@
   }
   // Dates and drop-downs open our own sheets instead of the browser's clunky pickers.
   document.addEventListener('click', function (e) {
-    var el = e.target && e.target.closest ? e.target.closest('input[type=date],select') : null; if (!el) return;
+    var el = e.target && e.target.closest ? e.target.closest('input.dateinp,select') : null; if (!el) return;
     e.preventDefault(); el.blur();
     if (el.tagName === 'SELECT') pickList(el); else pickDates(el);
   }, true);
-  document.addEventListener('mousedown', function (e) { var el = e.target && e.target.closest ? e.target.closest('input[type=date],select') : null; if (el) e.preventDefault(); }, true);
-  document.addEventListener('focusin', function (e) { if (e.target && e.target.type === 'date') e.target.blur(); });
+  document.addEventListener('mousedown', function (e) { var el = e.target && e.target.closest ? e.target.closest('input.dateinp,select') : null; if (el) e.preventDefault(); }, true);
+  document.addEventListener('focusin', function (e) { if (e.target && e.target.classList && e.target.classList.contains('dateinp')) e.target.blur(); });
 
   function pbRead() {
     Array.prototype.forEach.call(document.querySelectorAll('[data-pbn]'), function (i) { S.aBEdit[+i.getAttribute('data-pbn')].name = i.value; });
