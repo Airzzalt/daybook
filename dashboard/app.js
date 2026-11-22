@@ -486,8 +486,8 @@
     var ar = allocRange(), groups = groupPayouts(windowRows(ar.from, ar.to)).filter(function (g) { return g.revenue > 0 || g.ads > 0; }), a = allocCfg(), t = today();
     var quick = [['7', 'Last 7 days'], ['30', 'Last 30 days'], ['mtd', 'This month'], ['all', 'All time']].map(function (q) { return '<button type="button" class="chipbtn" data-ap="' + q[0] + '">' + q[1] + '</button>'; }).join('');
     var h = '<div class="phead rise"><h1>Allocations</h1><span class="meta">' + md(ar.from) + (ar.from === ar.to ? '' : ' – ' + md(ar.to)) + '</span><button type="button" class="btn" id="alloc-edit">Edit splits</button></div>' +
-      '<section class="card rise arange" style="--i:1;margin-bottom:14px"><div class="amrow"><label>From <input type="date" id="a-from" value="' + ar.from + '"></label><label>To <input type="date" id="a-to" value="' + ar.to + '"></label></div>' +
-      '<label class="payick">Or pick a payout <select id="a-pay">' + payOpts(ar) + '</select></label>' +
+      '<section class="card rise arange" style="--i:1;margin-bottom:14px"><div class="amrow"><label>From <input type="date" readonly id="a-from" value="' + ar.from + '"></label><label>To <input type="date" readonly id="a-to" value="' + ar.to + '"></label></div>' +
+      '<label class="payick">Or pick a payout <select id="a-pay" aria-label="Choose a payout">' + payOpts(ar) + '</select></label>' +
       '<div class="chips">' + quick + (ar.custom ? '<button type="button" class="chipbtn" id="a-reset">Match overview</button>' : '') + '</div></section>';
     var T = { rev: 0, fees: 0, sup: 0, gst: 0, ads: 0, net: 0, ord: 0, car: 0, st: 0, op: 0 };
     groups.forEach(function (g) { var x = allocData(g); T.rev += g.revenue; T.fees += x.fees; T.sup += x.sup; T.gst += x.gst; T.ads += g.ads; T.net += x.net; T.ord += g.orders; T.car += x.car; T.st += x.st; T.op += x.op; });
@@ -669,6 +669,96 @@
     var t = $('mtabs'); if (!t) return; var a = t.querySelector('[aria-pressed=true]'); place(t, '.thumb', a);
     if (a && t.scrollTo) { try { t.scrollTo({ left: Math.max(0, a.offsetLeft - 16), behavior: reduce ? 'auto' : 'smooth' }); } catch (e) {} }
   }
+  /* ---------- app-feel: bottom sheets, custom calendar, payout list ---------- */
+  var sheetOpen = null;
+  function openSheet(title, build) {
+    if (sheetOpen) sheetOpen.close(true);
+    var w = document.createElement('div'); w.className = 'bwrap';
+    w.innerHTML = '<div class="bscrim"></div><div class="bsheet" role="dialog" aria-modal="true"><div class="bgrab"><i></i></div><h4>' + esc(title) + '</h4><div class="bbody"></div></div>';
+    document.body.appendChild(w); document.body.style.overflow = 'hidden';
+    var sh = w.querySelector('.bsheet'), body = w.querySelector('.bbody'), closed = false, y0 = null, dy = 0;
+    function close(now) {
+      if (closed) return; closed = true; sheetOpen = null; document.body.style.overflow = '';
+      w.classList.add('out'); sh.style.transform = ''; setTimeout(function () { if (w.parentNode) w.parentNode.removeChild(w); }, now || reduce ? 0 : 220);
+    }
+    w.querySelector('.bscrim').addEventListener('click', function () { close(); });
+    var gr = w.querySelector('.bgrab'), hd = w.querySelector('h4');
+    [gr, hd].forEach(function (el) {
+      el.addEventListener('touchstart', function (e) { y0 = e.touches[0].clientY; dy = 0; sh.style.transition = 'none'; }, { passive: true });
+      el.addEventListener('touchmove', function (e) { if (y0 == null) return; dy = Math.max(0, e.touches[0].clientY - y0); sh.style.transform = 'translateY(' + dy + 'px)'; }, { passive: true });
+      el.addEventListener('touchend', function () { if (y0 == null) return; y0 = null; sh.style.transition = ''; if (dy > 90) close(); else sh.style.transform = ''; });
+    });
+    sheetOpen = { close: close };
+    build(body, close);
+    requestAnimationFrame(function () { requestAnimationFrame(function () { w.classList.add('in'); }); });
+    return sheetOpen;
+  }
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && sheetOpen) sheetOpen.close(); });
+
+  var PAIR = { 'a-from': 'a-to', 'a-to': 'a-from', 'from': 'to', 'to': 'from' };
+  var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function pickDates(input) {
+    var id = input.id, partner = PAIR[id] ? $(PAIR[id]) : null, range = !!partner, t = today();
+    var fromEl = range ? (id === 'a-from' || id === 'from' ? input : partner) : input, toEl = range ? (fromEl === input ? partner : input) : input;
+    var st = fromEl.value || t, en = range ? (toEl.value || st) : st, anchor = range ? (id === fromEl.id ? 'start' : 'end') : 'start';
+    var vy = +(st || t).slice(0, 4), vm = +(st || t).slice(5, 7) - 1, step = range ? 1 : 0;
+    // step: range mode, 1 = next tap sets the start, 2 = next tap sets the end
+    openSheet(range ? 'Choose dates' : 'Choose a date', function (body, close) {
+      function draw() {
+        var first = new Date(Date.UTC(vy, vm, 1)).getUTCDay(), lead = (first + 6) % 7, days = new Date(Date.UTC(vy, vm + 1, 0)).getUTCDate(), cells = '';
+        for (var i = 0; i < lead; i++) cells += '<span></span>';
+        for (var d = 1; d <= days; d++) {
+          var iso = vy + '-' + pad2(vm + 1) + '-' + pad2(d), cls = 'cd', dis = range && iso > t;
+          if (iso === t) cls += ' today';
+          if (range) { if (iso === st || iso === en) cls += ' sel'; else if (iso > st && iso < en) cls += ' mid'; if (iso === st && en > st) cls += ' l'; if (iso === en && en > st) cls += ' r'; }
+          else if (iso === st) cls += ' sel';
+          cells += '<button type="button" class="' + cls + '" data-d="' + iso + '"' + (dis ? ' disabled' : '') + '>' + d + '</button>';
+        }
+        var quick = range ? '<div class="cq"><button type="button" data-q="today">Today</button><button type="button" data-q="yday">Yesterday</button><button type="button" data-q="7">Last 7 days</button><button type="button" data-q="mtd">This month</button><button type="button" data-q="lastmo">Last month</button></div>' : '';
+        var sum = range ? (st === en ? dw(st) + ' ' + md(st) : md(st) + ' – ' + md(en)) : dw(st) + ' ' + md(st) + ' ' + st.slice(0, 4);
+        body.innerHTML = quick + '<div class="chead"><button type="button" class="cnav" data-m="-1" aria-label="Previous month">‹</button><b>' + MONTHS[vm] + ' ' + vy + '</b><button type="button" class="cnav" data-m="1" aria-label="Next month">›</button></div>' +
+          '<div class="cdow"><span>Mo</span><span>Tu</span><span>We</span><span>Th</span><span>Fr</span><span>Sa</span><span>Su</span></div><div class="cgrid">' + cells + '</div>' +
+          '<div class="cfoot"><span class="csum">' + sum + (range && step === 2 ? '<em>Tap the last day</em>' : '') + '</span><button type="button" class="btn p" id="cdone">Apply</button></div>';
+        Array.prototype.forEach.call(body.querySelectorAll('[data-m]'), function (b) { b.addEventListener('click', function () { tap(); vm += +b.getAttribute('data-m'); if (vm < 0) { vm = 11; vy--; } if (vm > 11) { vm = 0; vy++; } draw(); }); });
+        Array.prototype.forEach.call(body.querySelectorAll('[data-d]'), function (b) { b.addEventListener('click', function () {
+          tap(); var d = b.getAttribute('data-d');
+          if (!range) { st = d; en = d; draw(); return; }
+          if (step !== 2) { st = d; en = d; step = 2; } else { if (d < st) { en = st; st = d; } else en = d; step = 1; }
+          draw();
+        }); });
+        Array.prototype.forEach.call(body.querySelectorAll('[data-q]'), function (b) { b.addEventListener('click', function () {
+          tap(); var q = b.getAttribute('data-q'), m0 = t.slice(0, 8) + '01';
+          if (q === 'today') { st = en = t; } else if (q === 'yday') { st = en = shift(t, -1); } else if (q === '7') { st = shift(t, -6); en = t; } else if (q === 'mtd') { st = m0; en = t; }
+          else { var le = shift(m0, -1); st = le.slice(0, 8) + '01'; en = le; }
+          step = 1; vy = +st.slice(0, 4); vm = +st.slice(5, 7) - 1; draw();
+        }); });
+        body.querySelector('#cdone').addEventListener('click', function () {
+          tap(); fromEl.value = st; if (range) toEl.value = en;
+          ['input', 'change'].forEach(function (n) { fromEl.dispatchEvent(new Event(n, { bubbles: true })); });
+          close();
+        });
+      }
+      draw();
+    });
+  }
+  function pickList(sel) {
+    openSheet(sel.getAttribute('aria-label') || 'Choose one', function (body, close) {
+      var h = '<div class="plst">';
+      Array.prototype.forEach.call(sel.options, function (o, i) { if (!o.value) return; h += '<button type="button" class="pitem' + (o.selected ? ' on' : '') + '" data-i="' + i + '">' + esc(o.textContent) + '</button>'; });
+      body.innerHTML = h + '</div>';
+      Array.prototype.forEach.call(body.querySelectorAll('[data-i]'), function (b) { b.addEventListener('click', function () { tap(); sel.selectedIndex = +b.getAttribute('data-i'); sel.dispatchEvent(new Event('change', { bubbles: true })); close(); }); });
+    });
+  }
+  // Dates and drop-downs open our own sheets instead of the browser's clunky pickers.
+  document.addEventListener('click', function (e) {
+    var el = e.target && e.target.closest ? e.target.closest('input[type=date],select') : null; if (!el) return;
+    e.preventDefault(); el.blur();
+    if (el.tagName === 'SELECT') pickList(el); else pickDates(el);
+  }, true);
+  document.addEventListener('mousedown', function (e) { var el = e.target && e.target.closest ? e.target.closest('input[type=date],select') : null; if (el) e.preventDefault(); }, true);
+  document.addEventListener('focusin', function (e) { if (e.target && e.target.type === 'date') e.target.blur(); });
+
   function pbRead() {
     Array.prototype.forEach.call(document.querySelectorAll('[data-pbn]'), function (i) { S.aBEdit[+i.getAttribute('data-pbn')].name = i.value; });
     Array.prototype.forEach.call(document.querySelectorAll('[data-pbp]'), function (i) { S.aBEdit[+i.getAttribute('data-pbp')].pct = num(i.value); });

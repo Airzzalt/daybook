@@ -433,6 +433,46 @@ html,body{overscroll-behavior-y:contain}
 .chipbtn{padding:7px 13px;border-radius:99px;background:rgba(255,255,255,.07);border:1px solid var(--line);font-size:13px;font-weight:600;transition:transform .16s var(--out),background-color .15s ease}
 .chipbtn:active{transform:scale(.96)}
 @media (hover:hover) and (pointer:fine){.chipbtn:hover{background:rgba(255,255,255,.12)}}
+
+/* ---------- app feel ---------- */
+html{-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none}
+body{-webkit-user-select:none;user-select:none;touch-action:manipulation}
+input,textarea,select{-webkit-user-select:text;user-select:text}
+button,.chipbtn,.btn,.pitem,.cd,.dock button,.plist button{transition:transform .12s ease,background-color .15s ease,opacity .15s ease}
+button:active,.chipbtn:active,.btn:active,.pitem:active,.plist button:active,.dock button:active{transform:scale(.96)}
+input[type=date][readonly],select{cursor:pointer;caret-color:transparent}
+@media (max-width:700px){input[type=date],input[type=number],input[type=text],input[type=password],select{font-size:16px!important}}
+@media (max-width:700px){
+  .modal{align-items:flex-end;padding:0}
+  .modal .box{max-width:none;border-radius:26px 26px 0 0;max-height:90dvh;padding-bottom:env(safe-area-inset-bottom);animation:sheet-up .32s cubic-bezier(.22,1,.36,1)}
+  .modal.out .box{animation:sheet-down .2s ease-in forwards}
+}
+@keyframes sheet-up{from{transform:translateY(100%)}to{transform:none}}
+@keyframes sheet-down{to{transform:translateY(100%)}}
+.bwrap{position:fixed;inset:0;z-index:120;display:flex;align-items:flex-end;justify-content:center}
+.bscrim{position:absolute;inset:0;background:rgba(0,0,0,.55);opacity:0;transition:opacity .25s ease}
+.bwrap.in .bscrim{opacity:1}.bwrap.out .bscrim{opacity:0}
+.bsheet{position:relative;width:100%;max-width:480px;max-height:88dvh;overflow:auto;background:#161719;border:1px solid var(--line);border-bottom:0;border-radius:28px 28px 0 0;padding:0 16px calc(16px + env(safe-area-inset-bottom));transform:translateY(105%);transition:transform .34s cubic-bezier(.22,1,.36,1);box-shadow:0 -20px 60px rgba(0,0,0,.5);overscroll-behavior:contain}
+.bwrap.in .bsheet{transform:none}.bwrap.out .bsheet{transform:translateY(105%);transition-duration:.2s}
+.bgrab{padding:10px 0 6px;display:flex;justify-content:center;touch-action:none}.bgrab i{width:38px;height:5px;border-radius:3px;background:rgba(255,255,255,.22)}
+.bsheet h4{font-size:17px;font-weight:650;letter-spacing:-.01em;margin:2px 4px 12px;touch-action:none}
+@media (min-width:701px){.bwrap{align-items:center}.bsheet{border-radius:26px;border-bottom:1px solid var(--line);padding-bottom:16px}}
+.cq{display:flex;gap:8px;overflow-x:auto;margin:0 -16px 12px;padding:0 16px;scrollbar-width:none}.cq::-webkit-scrollbar{display:none}
+.cq button{flex:none;padding:8px 13px;border-radius:999px;background:rgba(255,255,255,.07);border:1px solid var(--line);color:var(--tx);font-size:13px;font-weight:550}
+.chead{display:flex;align-items:center;justify-content:space-between;margin:4px 0 8px}.chead b{font-size:16px;font-weight:650}
+.cnav{width:42px;height:42px;border-radius:50%;background:rgba(255,255,255,.07);color:var(--tx);font-size:22px;line-height:1}
+.cdow,.cgrid{display:grid;grid-template-columns:repeat(7,1fr)}.cdow span{text-align:center;font-size:12px;color:var(--tx3);padding:4px 0}
+.cgrid{row-gap:2px}.cd{height:44px;font-size:15px;font-weight:500;color:var(--tx);border-radius:0;position:relative;background:none}
+.cd.today{color:#fff;font-weight:700;text-decoration:underline;text-underline-offset:4px}
+.cd.mid{background:rgba(255,255,255,.12)}
+.cd.sel{background:var(--tx);color:#000;border-radius:50%;font-weight:700}
+.cd.sel.l{border-radius:22px 0 0 22px}.cd.sel.r{border-radius:0 22px 22px 0}.cd.sel.l.r{border-radius:50%}
+.cd:disabled{opacity:.25}
+.cfoot{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:14px}.csum{font-size:14px;font-weight:600;display:flex;flex-direction:column}.csum em{font-style:normal;font-weight:400;font-size:12px;color:var(--tx3)}
+.cfoot .btn{padding:12px 26px;border-radius:999px;background:var(--tx);color:#000;font-weight:650}
+.plst{display:flex;flex-direction:column;gap:6px}
+.pitem{text-align:left;padding:14px;border-radius:16px;background:rgba(255,255,255,.05);color:var(--tx);font-size:15px;line-height:1.3}.pitem.on{background:rgba(255,255,255,.14);font-weight:650}
+@media (prefers-reduced-motion:reduce){.bsheet,.bscrim{transition:none}.modal .box{animation:none!important}}
 </style>
 </head>
 <body>
@@ -472,7 +512,7 @@ html,body{overscroll-behavior-y:contain}
         <button data-p="today">Today</button><button data-p="yday">Yesterday</button><button data-p="7">Last 7 days</button><button data-p="14">Last 14 days</button>
         <button data-p="30">Last 30 days</button><button data-p="mtd">This month</button><button data-p="lastmo">Last month</button><button data-p="all">All time</button>
       </div>
-      <div class="amsec"><span class="lab">CUSTOM</span><div class="amrow"><input type="date" id="from" aria-label="From"><span>–</span><input type="date" id="to" aria-label="To"></div></div>
+      <div class="amsec"><span class="lab">CUSTOM</span><div class="amrow"><input type="date" readonly id="from" aria-label="From"><span>–</span><input type="date" readonly id="to" aria-label="To"></div></div>
     </div>
     <div class="mfoot"><button type="button" class="btn p" id="rangedone">Done</button></div>
   </div>
@@ -487,7 +527,7 @@ html,body{overscroll-behavior-y:contain}
         <label>Stock <input type="number" id="am-ast" min="0" max="100" step="1">%</label>
         <span>Operating <span class="amop" id="am-aop">35%</span></span></div></div>
       <div class="amsec"><span class="lab">SWITCH DATE — the new split starts on</span>
-        <div class="amrow"><input type="date" id="am-date" aria-label="Switch date"></div></div>
+        <div class="amrow"><input type="date" readonly id="am-date" aria-label="Switch date"></div></div>
       <div class="amsec"><span class="lab">EARLIER SPLIT — for days before that</span>
         <div class="amrow"><label>Personal <input type="number" id="am-bcar" min="0" max="100" step="1">%</label>
         <label>Stock <input type="number" id="am-bst" min="0" max="100" step="1">%</label>
