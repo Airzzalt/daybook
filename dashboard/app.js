@@ -433,12 +433,22 @@
     return Object.keys(g).sort().reverse().map(function (k) { return g[k]; });
   }
   function ln(label, sub, val, cls) { return '<div class="ln ' + cls + '"><div class="lt"><b>' + label + '</b><em>' + esc(sub) + '</em></div><div class="lv">' + val + '</div></div>'; }
+  function stripeIso(ts) { return new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ts * 1000)); }
+  /* what Stripe actually paid out on a payout day (null when there is no match) */
+  function stripeFor(pay) {
+    if (!(D.stripe && D.stripe.available)) return null;
+    var m = D.stripe.payouts.filter(function (p) { return stripeIso(p.arrival) === pay && p.status !== 'failed' && p.status !== 'canceled'; });
+    return m.length ? { amount: m.reduce(function (a, p) { return a + p.amount; }, 0), ids: m.map(function (p) { return p.id; }).filter(Boolean) } : null;
+  }
+  var PS_DEFAULT = [{ name: 'Tax', pct: 30 }, { name: 'Savings', pct: 20 }, { name: 'Spending', pct: 50 }];
+  function personalSplit() { var l = D.settings && D.settings.personalSplit; return l && l.length ? l : PS_DEFAULT; }
   function allocData(g, cfgDate, cfg) {
-    var fees = g.revenue * K.fee, lands = g.revenue - fees, est = g.est != null ? g.est : cogsEst(g.days[0], g.bottles, g.minis);
+    var sx = !cfg && S.aStripe ? stripeFor(g.pay) : null;
+    var fees = sx ? g.revenue - sx.amount : g.revenue * K.fee, lands = g.revenue - fees, est = g.est != null ? g.est : cogsEst(g.days[0], g.bottles, g.minis);
     var act = supplierMap()[g.pay], isAct = act != null, sup = isAct ? num(act) : est;
     var gst = g.days.some(function (d) { return d >= K.gstFrom; }) ? lands / 11 : 0, net = g.revenue - sup - fees - g.ads - gst;
     var a = cfg ? (g.days[0] >= cfgDate ? { car: num(cfg.after.car) / 100, stock: num(cfg.after.stock) / 100 } : { car: num(cfg.before.car) / 100, stock: num(cfg.before.stock) / 100 }) : allocFor(g.days[0]);
-    return { fees: fees, lands: lands, est: est, sup: sup, isAct: isAct, gst: gst, net: net, a: a, car: net * a.car, st: net * a.stock, op: net - net * a.car - net * a.stock };
+    return { stripe: !!sx, fees: fees, lands: lands, est: est, sup: sup, isAct: isAct, gst: gst, net: net, a: a, car: net * a.car, st: net * a.stock, op: net - net * a.car - net * a.stock };
   }
   function splitText(s) { return 'Personal ' + s.car + ' / Stock ' + s.stock + ' / Operating ' + (100 - s.car - s.stock); }
   function allocRange() { return { from: S.aFrom || S.from, to: S.aTo || S.to, custom: !!(S.aFrom && S.aTo) }; }
@@ -447,27 +457,72 @@
     S.aFrom = from; S.aTo = to;
     if (D.wf && D.wt && D.wf <= from && D.wt >= to) { render(false); } else { load(); }
   }
+  function payOpts(ar) {
+    var rows = windowRows(D.wf || ar.from, D.wt || ar.to), gs = groupPayouts(rows).filter(function (g) { return g.revenue > 0; }).slice(0, 14), cur = '';
+    var o = '<option value="">Choose a payout…</option>';
+    gs.forEach(function (g) {
+      var f = g.days.slice().sort(), a = f[0], b = f[f.length - 1], sel = ar.from === a && ar.to === b;
+      o += '<option value="' + a + '|' + b + '"' + (sel ? ' selected' : '') + '>' + dw(g.pay) + ' ' + md(g.pay) + (g.pay > today() ? ' (not landed yet)' : '') + ' · sales ' + dw(a) + ' ' + md(a) + (a === b ? '' : ' – ' + dw(b) + ' ' + md(b)) + '</option>';
+    });
+    return o;
+  }
+  function stripeCard(groups, ar) {
+    if (!(D.stripe && D.stripe.available)) return '<section class="card rise" style="--i:3;margin-bottom:14px"><h3>Stripe payouts</h3><div class="empty"><b>Stripe isn’t connected.</b>Add STRIPE_KEY in the Render service settings to pull the exact payout amounts.</div></section>';
+    var rows = '', any = false;
+    groups.forEach(function (g) {
+      var sx = stripeFor(g.pay), fees = g.revenue * K.fee, exp = g.revenue - fees;
+      if (!sx) { rows += ln(dw(g.pay) + ' ' + md(g.pay), 'no Stripe payout found for this day yet', '—', ''); return; }
+      any = true; var diff = sx.amount - exp, det = sx.ids.map(function (id) { return D.sdetail && D.sdetail[id]; }).filter(Boolean);
+      rows += ln(dw(g.pay) + ' ' + md(g.pay) + ' payout', 'Stripe paid ' + money(sx.amount, 2) + ' · estimate was ' + money(exp, 2) + ' (' + (diff >= 0 ? '+' : '−') + money(Math.abs(diff), 2) + ')', money(sx.amount, 2), 'net');
+      if (det.length) {
+        var d = det.reduce(function (a, x) { return { gross: a.gross + x.gross, fees: a.fees + x.fees, refunds: a.refunds + x.refunds, other: a.other + x.other, net: a.net + x.net, count: a.count + x.count }; }, { gross: 0, fees: 0, refunds: 0, other: 0, net: 0, count: 0 });
+        rows += ln('Charges', d.count + ' items in this payout', money(d.gross, 2), '') + ln('Stripe fees', 'exact', '−' + money(d.fees, 2), 'out') + ln('Refunds', '', '−' + money(Math.abs(d.refunds), 2), 'out') + (Math.abs(d.other) > 0.005 ? ln('Other', 'disputes, adjustments', money(d.other, 2), '') : '');
+      } else if (sx.ids.length) rows += '<div class="chips" style="margin:2px 0 8px"><button type="button" class="chipbtn" data-sdet="' + sx.ids.join(',') + '">Show exact charges, fees and refunds</button></div>';
+    });
+    return '<section class="card rise" style="--i:3;margin-bottom:14px"><h3>Stripe payouts</h3>' + rows +
+      (any ? '<div class="chips" style="margin-top:10px"><button type="button" class="' + (S.aStripe ? 'btn' : 'chipbtn') + '" id="a-stripe">' + (S.aStripe ? '✓ Using exact Stripe amounts' : 'Use exact Stripe amounts in the profit') + '</button></div><div class="foot" style="margin-top:6px">With this on, “fees” = sales − what Stripe actually paid out, so refunds and disputes are included.' + (S.aSdErr ? ' <b>' + esc(S.aSdErr) + '</b>' : '') + '</div>' : '') + '</section>';
+  }
   function vAlloc() {
     var ar = allocRange(), groups = groupPayouts(windowRows(ar.from, ar.to)).filter(function (g) { return g.revenue > 0 || g.ads > 0; }), a = allocCfg(), t = today();
     var quick = [['7', 'Last 7 days'], ['30', 'Last 30 days'], ['mtd', 'This month'], ['all', 'All time']].map(function (q) { return '<button type="button" class="chipbtn" data-ap="' + q[0] + '">' + q[1] + '</button>'; }).join('');
     var h = '<div class="phead rise"><h1>Allocations</h1><span class="meta">' + md(ar.from) + (ar.from === ar.to ? '' : ' – ' + md(ar.to)) + '</span><button type="button" class="btn" id="alloc-edit">Edit splits</button></div>' +
       '<section class="card rise arange" style="--i:1;margin-bottom:14px"><div class="amrow"><label>From <input type="date" id="a-from" value="' + ar.from + '"></label><label>To <input type="date" id="a-to" value="' + ar.to + '"></label></div>' +
+      '<label class="payick">Or pick a payout <select id="a-pay">' + payOpts(ar) + '</select></label>' +
       '<div class="chips">' + quick + (ar.custom ? '<button type="button" class="chipbtn" id="a-reset">Match overview</button>' : '') + '</div></section>';
     var T = { rev: 0, fees: 0, sup: 0, gst: 0, ads: 0, net: 0, ord: 0, car: 0, st: 0, op: 0 };
     groups.forEach(function (g) { var x = allocData(g); T.rev += g.revenue; T.fees += x.fees; T.sup += x.sup; T.gst += x.gst; T.ads += g.ads; T.net += x.net; T.ord += g.orders; T.car += x.car; T.st += x.st; T.op += x.op; });
-    var sk = ar.from + '|' + ar.to, custom = S.aSup != null && S.aSupKey === sk, auto = T.sup;
+    var netAuto = T.net, sk = ar.from + '|' + ar.to, custom = S.aSup != null && S.aSupKey === sk, auto = T.sup;
     if (custom) { T.net += T.sup - S.aSup; T.sup = S.aSup; }
     var supRow = '<div class="ln out"><div class="lt"><b>Supplier (COGS)</b><em>' + (custom ? 'your amount · auto was ' + money(auto, 2) : 'estimate or actual invoice · type to change') + '</em></div><div class="lv"><input type="number" step="0.01" id="a-sup" value="' + (custom ? S.aSup : '') + '" placeholder="' + auto.toFixed(2) + '" aria-label="Custom supplier amount"></div></div>' + (custom ? '<div style="padding:4px 0 8px"><button type="button" class="chipbtn" id="a-sup-reset">Back to automatic</button></div>' : '');
     h += '<section class="card rise" style="--i:1;margin-bottom:14px"><div style="display:grid;grid-template-columns:1fr 1fr;gap:14px"><div><div class="meta">Revenue</div><div style="font-size:26px;font-weight:650;letter-spacing:-.02em">' + money(T.rev, 2) + '</div></div><div><div class="meta">Profit</div><div style="font-size:26px;font-weight:650;letter-spacing:-.02em;color:' + (T.net < 0 ? 'var(--bad,#f0616d)' : 'var(--good,#4ade80)') + '">' + money(T.net, 2) + '</div></div></div>' +
       '<div style="margin-top:12px">' + ln('Orders', md(ar.from) + (ar.from === ar.to ? '' : ' – ' + md(ar.to)), String(T.ord), '') + ln('Processing fees', '', '−' + money(T.fees, 2), 'out') + supRow + ln('GST', 'to the GST account', '−' + money(T.gst, 2), 'out') + ln('Ad spend', '', '−' + money(T.ads, 2), 'out') +
       ln('Profit', 'revenue − everything above', money(T.net, 2), 'net') + '</div></section>';
+    var carP = netAuto ? T.car / netAuto : allocFor(ar.to).car, stP = netAuto ? T.st / netAuto : allocFor(ar.to).stock;
+    var sCar = T.net * carP, sSt = T.net * stP, sOp = T.net - sCar - sSt, pl = personalSplit(), plTot = pl.reduce(function (a, b) { return a + num(b.pct); }, 0);
+    h += '<section class="card rise" style="--i:2;margin-bottom:14px"><h3>Your split</h3><div class="foot" style="margin:2px 0 8px">Profit of ' + money(T.net, 2) + ' shared out</div>' +
+      '<div class="ln move car"><div class="lt"><b>→ Personal</b><em>' + Math.round(carP * 100) + '%</em></div><div class="lv">' + money(sCar, 2) + '</div></div>' +
+      '<div class="ln move"><div class="lt"><b>→ Stock account</b><em>' + Math.round(stP * 100) + '%</em></div><div class="lv">' + money(sSt, 2) + '</div></div>' +
+      '<div class="ln move"><div class="lt"><b>→ Operating</b><em>' + Math.round((1 - carP - stP) * 100) + '% · ads, refunds, you</em></div><div class="lv">' + money(sOp, 2) + '</div></div></section>';
+    h += '<section class="card rise" style="--i:3;margin-bottom:14px"><h3>Inside Personal<span class="r">' + money(sCar, 2) + '</span></h3>';
+    if (S.aBEdit) {
+      h += '<div id="pb-rows">' + S.aBEdit.map(function (b, i) { return '<div class="amrow" style="margin:6px 0"><input type="text" maxlength="24" data-pbn="' + i + '" value="' + esc(b.name) + '" aria-label="Name"><input type="number" step="1" min="0" max="100" data-pbp="' + i + '" value="' + b.pct + '" aria-label="Percent" style="max-width:90px"><button type="button" class="chipbtn" data-pbx="' + i + '">Remove</button></div>'; }).join('') + '</div>' +
+        '<div class="chips"><button type="button" class="chipbtn" id="pb-add">+ Add bucket</button></div>' +
+        '<div class="foot" id="pb-tot" style="margin:8px 0">Total ' + S.aBEdit.reduce(function (a, b) { return a + num(b.pct); }, 0) + '% (must be 100% or less)</div>' +
+        '<div class="chips"><button type="button" class="btn" id="pb-save">Save buckets</button><button type="button" class="chipbtn" id="pb-cancel">Cancel</button></div><div class="foot" id="pb-msg"></div>';
+    } else {
+      pl.forEach(function (b) { h += ln(esc(b.name), num(b.pct) + '% of Personal', money(sCar * num(b.pct) / 100, 2), ''); });
+      if (plTot < 99.99) h += ln('Unassigned', (100 - plTot).toFixed(0) + '% of Personal', money(sCar * (100 - plTot) / 100, 2), '');
+      h += '<div class="chips" style="margin-top:10px"><button type="button" class="chipbtn" id="pb-edit">Edit buckets (tax, savings…)</button></div>';
+    }
+    h += '</section>';
+    h += stripeCard(groups, ar);
     h += '<div class="note ok rise" style="--i:1;margin:0 0 14px"><div><b>Split now: ' + splitText(a.after) + '.</b>This applies to every trading day from ' + md(a.switchDate) + '. Before that: ' + splitText(a.before) + '. Supplier cost is estimated from the bottle count until you type in what she actually invoiced. Refunds and anything unusual are not in here — they come out of Operating.</div></div>';
     if (!groups.length) h += '<div class="card"><div class="empty">No trade in this range.</div></div>';
     groups.forEach(function (g, i) {
       var x = allocData(g), a2 = x.a, cur = g.days[0] >= a.switchDate;
       var from = g.days.length === 1 ? dw(g.days[0]) + ' ' + md(g.days[0]) : g.days.map(dw).join(', ') + ' ' + md(g.days[0]) + '–' + md(g.days[g.days.length - 1]);
       h += '<div class="pay rise' + (i === 0 ? ' next' : '') + '" data-pay="' + g.pay + '" style="--i:' + Math.min(i + 2, 9) + '"><div class="payhead"><span class="d">' + dw(g.pay) + ' ' + md(g.pay) + '</span><span class="f">from ' + from + ' · ' + g.orders + ' orders</span><span class="amt">' + money(x.lands, 2) + ' lands</span></div>' +
-        ln('Revenue', 'before fees', money(g.revenue, 2), '') + ln('Processing fees', (K.fee * 100).toFixed(1) + '% estimate', '−' + money(x.fees, 2), 'out') +
+        ln('Revenue', 'before fees', money(g.revenue, 2), '') + ln('Processing fees', x.stripe ? 'exact, from Stripe' : (K.fee * 100).toFixed(1) + '% estimate', '−' + money(x.fees, 2), 'out') +
         '<div class="ln out"><div class="lt"><b>Pay the supplier</b><em>' + (x.isAct ? 'her invoice' : g.bottles + ' bottles' + (g.minis ? ' + ' + g.minis + ' miniatures' : '') + ' · estimate') + (x.isAct ? '<span class="tick">actual</span>' : '') + '</em></div>' +
         '<div class="lv"><input type="number" step="0.01" data-sup="' + g.pay + '" value="' + (x.isAct ? x.sup.toFixed(2) : '') + '" placeholder="' + x.est.toFixed(2) + '" aria-label="Actual supplier invoice"></div></div>' +
         ln('Move to the GST account', 'revenue less fees ÷ 11', '−' + money(x.gst, 2), 'out') + ln('Ad spend', g.adsKnown ? 'already paid to Meta' : 'not known for these days', g.adsKnown ? '−' + money(g.ads, 2) : '—', 'out') +
@@ -614,6 +669,10 @@
     var t = $('mtabs'); if (!t) return; var a = t.querySelector('[aria-pressed=true]'); place(t, '.thumb', a);
     if (a && t.scrollTo) { try { t.scrollTo({ left: Math.max(0, a.offsetLeft - 16), behavior: reduce ? 'auto' : 'smooth' }); } catch (e) {} }
   }
+  function pbRead() {
+    Array.prototype.forEach.call(document.querySelectorAll('[data-pbn]'), function (i) { S.aBEdit[+i.getAttribute('data-pbn')].name = i.value; });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-pbp]'), function (i) { S.aBEdit[+i.getAttribute('data-pbp')].pct = num(i.value); });
+  }
   function bindPage() {
     placeTabs();
     var hero = $('hero');
@@ -639,6 +698,24 @@
         else if (p === 'mtd') setAllocRange(t.slice(0, 8) + '01', t);
         else setAllocRange(shift(t, -(parseInt(p, 10) - 1)), t);
       });
+    });
+    var apay = $('a-pay'); if (apay) apay.addEventListener('change', function () { if (!apay.value) return; tap(); var v = apay.value.split('|'); setAllocRange(v[0], v[1]); });
+    var ast = $('a-stripe'); if (ast) ast.addEventListener('click', function () { tap(); S.aStripe = !S.aStripe; render(false); });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-sdet]'), function (b) { b.addEventListener('click', function () {
+      tap(); b.disabled = true; b.textContent = 'Loading…'; D.sdetail = D.sdetail || {};
+      Promise.all(b.getAttribute('data-sdet').split(',').map(function (id) { return api('/api/stripe/payout?id=' + encodeURIComponent(id)).then(function (v) { if (v && v.available) D.sdetail[id] = v; else throw new Error((v && v.message) || 'Stripe did not answer'); }); }))
+        .then(function () { S.aSdErr = ''; render(false); }).catch(function (e) { S.aSdErr = (e && e.message) || 'Could not load the breakdown.'; render(false); });
+    }); });
+    var pbe = $('pb-edit'); if (pbe) pbe.addEventListener('click', function () { tap(); S.aBEdit = personalSplit().map(function (b) { return { name: b.name, pct: num(b.pct) }; }); render(false); });
+    var pbc = $('pb-cancel'); if (pbc) pbc.addEventListener('click', function () { tap(); S.aBEdit = null; render(false); });
+    var pba = $('pb-add'); if (pba) pba.addEventListener('click', function () { tap(); pbRead(); if (S.aBEdit.length < 8) S.aBEdit.push({ name: 'New bucket', pct: 0 }); render(false); });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-pbx]'), function (b) { b.addEventListener('click', function () { tap(); pbRead(); S.aBEdit.splice(+b.getAttribute('data-pbx'), 1); render(false); }); });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-pbp]'), function (i) { i.addEventListener('input', function () { pbRead(); var t = $('pb-tot'); if (t) t.textContent = 'Total ' + S.aBEdit.reduce(function (a, b) { return a + num(b.pct); }, 0) + '% (must be 100% or less)'; }); });
+    var pbs = $('pb-save'); if (pbs) pbs.addEventListener('click', function () {
+      pbRead(); var tot = S.aBEdit.reduce(function (a, b) { return a + num(b.pct); }, 0), msg = $('pb-msg');
+      if (tot > 100.0001) { msg.textContent = 'That adds up to ' + tot + '% — it has to be 100% or less.'; return; }
+      var list = S.aBEdit.filter(function (b) { return String(b.name).trim(); }); pbs.disabled = true; msg.textContent = 'Saving…';
+      putSettings({ personalSplit: list }).then(function () { tap(); S.aBEdit = null; render(false); }).catch(function () { pbs.disabled = false; msg.textContent = 'Could not save it.'; });
     });
     var asup = $('a-sup'); if (asup) asup.addEventListener('change', function () { var v = asup.value.trim(); var r = allocRange(); if (v === '' || isNaN(parseFloat(v))) { S.aSup = null; } else { S.aSup = parseFloat(v); S.aSupKey = r.from + '|' + r.to; } render(false); });
     var asr = $('a-sup-reset'); if (asr) asr.addEventListener('click', function () { tap(); S.aSup = null; render(false); });

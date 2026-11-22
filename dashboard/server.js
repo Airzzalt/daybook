@@ -368,7 +368,7 @@ app.get('/api/stripe', requireAuth, async (req, res) => {
   const key = process.env.STRIPE_KEY;
   if (!key) return res.json({ available: false, reason: 'not_configured' });
   try {
-    const r = await fetch('https://api.stripe.com/v1/payouts?limit=8', {
+    const r = await fetch('https://api.stripe.com/v1/payouts?limit=40', {
       headers: { Authorization: 'Bearer ' + key },
       signal: AbortSignal.timeout(20000),
     });
@@ -376,11 +376,39 @@ app.get('/api/stripe', requireAuth, async (req, res) => {
     if (j.error) return res.json({ available: false, reason: 'api_error', message: j.error.message });
     res.json({
       available: true,
-      payouts: (j.data || []).map((p) => ({ arrival: p.arrival_date, amount: p.amount / 100, status: p.status })),
+      payouts: (j.data || []).map((p) => ({ id: p.id, arrival: p.arrival_date, amount: p.amount / 100, status: p.status })),
     });
   } catch (e) {
     res.json({ available: false, reason: 'unreachable', message: e.message });
   }
+});
+
+/* Exact breakdown of ONE payout: every charge, fee and refund Stripe put in it. */
+app.get('/api/stripe/payout', requireAuth, async (req, res) => {
+  const key = process.env.STRIPE_KEY, id = String(req.query.id || '');
+  if (!key) return res.json({ available: false, reason: 'not_configured' });
+  if (!/^po_[A-Za-z0-9]+$/.test(id)) return res.status(400).json({ error: 'bad_id' });
+  try {
+    const t = { gross: 0, fees: 0, refunds: 0, other: 0, net: 0, count: 0 };
+    let after = '';
+    for (let page = 0; page < 20; page++) {
+      const r = await fetch('https://api.stripe.com/v1/balance_transactions?payout=' + id + '&limit=100' + after, {
+        headers: { Authorization: 'Bearer ' + key }, signal: AbortSignal.timeout(20000),
+      });
+      const j = await r.json();
+      if (j.error) return res.json({ available: false, reason: 'api_error', message: j.error.message });
+      for (const b of j.data || []) {
+        if (b.type === 'payout') continue; // the payout line itself
+        t.count++; t.net += b.net / 100; t.fees += b.fee / 100;
+        if (b.type === 'charge' || b.type === 'payment') t.gross += b.amount / 100;
+        else if (b.type === 'refund' || b.type === 'payment_refund') t.refunds += b.amount / 100;
+        else t.other += b.amount / 100;
+      }
+      if (!j.has_more || !j.data.length) break;
+      after = '&starting_after=' + j.data[j.data.length - 1].id;
+    }
+    res.json({ available: true, id, gross: t.gross, fees: t.fees, refunds: t.refunds, other: t.other, net: t.net, count: t.count });
+  } catch (e) { res.json({ available: false, reason: 'unreachable', message: e.message }); }
 });
 
 /* -------------------------------------------------------------- settings */
@@ -408,6 +436,12 @@ app.put('/api/settings', requireAuth, async (req, res) => {
       }
       clean[k] = map; // an empty map is allowed, so clearing the last entry sticks
     }
+  }
+  // Personal fund split into buckets (tax, savings...): up to 8 named percentages.
+  if (Array.isArray(body.personalSplit)) {
+    const list = body.personalSplit.slice(0, 8).map((b) => ({ name: String((b && b.name) || '').trim().slice(0, 24), pct: Number(b && b.pct) }))
+      .filter((b) => b.name && Number.isFinite(b.pct) && b.pct >= 0 && b.pct <= 100);
+    if (list.reduce((a, b) => a + b.pct, 0) <= 100.0001) clean.personalSplit = list;
   }
   // Allocation splits: a switch date plus car/stock percentages either side of it.
   if (body.alloc && typeof body.alloc === 'object' && !Array.isArray(body.alloc)) {
